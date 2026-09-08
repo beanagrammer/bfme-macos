@@ -1,19 +1,23 @@
 # Licensing
 
-No overall licence has been chosen for this repository yet. Before publishing it
-widely, pick one — the pieces have different constraints:
+This repository is licensed **GPL-3.0-or-later** (see `LICENSE`).
 
-- `patches/*.patch` are diffs against Wine, which is LGPL-2.1-or-later. Anything
-  derived from Wine source has to stay under that licence.
-- The release bundle contains a compiled Wine, so distributing it carries Wine's
-  LGPL obligations: the corresponding source must be available. `patches/README.md`
-  plus the exact upstream tag (`wine-11.17`) and the configure line in README.md
-  are what satisfy that; keep them accurate.
-- `tools/x87sidecar/` is a third-party binary, from
-  https://github.com/Sonic-The-Hedgehog-LNK1123/rosetta-x87 — check its licence
-  before redistributing it.
-- The scripts here (`bfme`, `install.sh`, `bfme-config.sh`, `dist/`, `tools/`) are
-  original work and can be licensed however you like.
+Some parts carry additional constraints, which the GPL choice respects:
 
-Nothing in this repository contains or redistributes EA's game. The All in One
-Launcher is downloaded from bfmeladder.com at install time, not bundled.
+- **`patches/*.patch`** are diffs against Wine, which is LGPL-2.1-or-later. LGPL-2.1
+  section 3 permits applying the GPL to a copy, and "or later" covers GPL-3.0, so
+  distributing these patches under GPL-3.0 is allowed. Wine upstream itself remains
+  LGPL — if you send any of this upstream, send it under Wine's licence, not this one.
+
+- **The release bundle** contains a compiled Wine, distributed under Wine's own
+  LGPL-2.1-or-later. That carries a source-availability obligation, met by:
+  the upstream tag `wine-11.17`, the patch files in `patches/`, and the exact
+  `configure` invocation in `README.md`. Keep those three accurate or the
+  obligation is not met.
+
+- **`tools/x87sidecar/`** is a third-party binary from
+  https://github.com/Sonic-The-Hedgehog-LNK1123/rosetta-x87 and is redistributed
+  under its own licence, not this one. Check it before shipping the bundle widely.
+
+Nothing here contains or redistributes EA's game. The All in One Launcher is
+downloaded from bfmeladder.com at install time, not bundled.

@@ -122,3 +122,9 @@ config/              GameLOD override for lower-end machines
 
 `wine/`, `build-wine/`, `deps-x86_64/`, the game installers and the release
 tarball are not in git — they are large third-party or generated artifacts.
+
+## Licence
+
+GPL-3.0-or-later — see [`LICENSE`](LICENSE). The Wine patches derive from Wine
+(LGPL-2.1-or-later) and the release bundle ships a compiled Wine under Wine's own
+licence; [`NOTICE`](NOTICE) records what that requires.

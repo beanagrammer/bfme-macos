@@ -104,9 +104,15 @@ cmd_doctor() {
 }
 
 cmd_make_apps() {
-  local apps="$HOME/Applications" name cmd bundle spec
+  local apps name cmd bundle spec other
   local lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+  # /Applications is where Spotlight and Launch Services expect to find apps, and
+  # on a Mac whose owner is an admin it is group-writable without sudo. Fall back
+  # to ~/Applications when it is not.
+  if [ -w /Applications ]; then apps="/Applications"; other="$HOME/Applications"
+  else apps="$HOME/Applications"; other="/Applications"; fi
   mkdir -p "$apps" || bfme_die "could not create $apps"
+  print -r -- "  installing into $apps"
   for spec in "BFME Launcher:launcher" "BFME Arena:arena" "BFME Solo:play"; do
     name="${spec%%:*}"; cmd="${spec##*:}"
     bundle="$apps/$name.app"
@@ -136,11 +142,22 @@ PLIST
 exec "$BFME_HOME/bfme" $cmd
 RUNNER
     chmod +x "$bundle/Contents/MacOS/run"
+    # Classic type/creator file. Still expected by parts of Launch Services.
+    printf 'APPL????' > "$bundle/Contents/PkgInfo"
+    # Ad-hoc signature. An unsigned bundle launches, but macOS treats it as
+    # second class -- among other things it is ranked poorly or skipped in
+    # Spotlight's application results.
+    codesign --force --sign - --timestamp=none "$bundle" >/dev/null 2>&1 \
+      || print -r -- "  (warning: could not ad-hoc sign $name; it will still run)" >&2
     # A hand-made bundle is not in the Launch Services database until something
     # registers it, and Spotlight's app results come from that database, not from
     # the file index -- without this the apps are findable only as folders.
     [ -x "$lsregister" ] && "$lsregister" -f "$bundle" >/dev/null 2>&1
     print -r -- "  $bundle"
+  done
+  # Drop any copy left in the other location so there are not two of each.
+  for spec in "BFME Launcher" "BFME Arena" "BFME Solo"; do
+    [ -d "$other/$spec.app" ] && { rm -rf "$other/$spec.app"; print -r -- "  removed the stale copy in $other"; }
   done
   # Nudge the metadata index too, so they show up without waiting.
   mdimport "$apps" >/dev/null 2>&1 || true
