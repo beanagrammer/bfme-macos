@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Print the game window's macOS bounds as "x,y,w,h" for screencapture -R.
-/Users/beanagrammer/Projects/BFME/tools/winlist 2>/dev/null \
+"${0:A:h}/winlist" 2>/dev/null \
   | grep -i "Battle for Middle-earth" | grep -vi arena | head -1 \
   | python3 -c '
 import sys, re

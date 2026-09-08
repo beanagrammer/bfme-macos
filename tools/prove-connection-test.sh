@@ -6,7 +6,7 @@
 #   4. retry until the flag file comes back as "true"
 set -u
 OUT="${1:?}"; N="${2:-12}"; mkdir -p "$OUT"
-P=/Users/beanagrammer/Projects/BFME
+P="${0:A:h:h}"
 R="$P/run-custom-wine.sh"; T="$P/tools/wintool/wintool.exe"; W="$P/tools/winlist"
 PFX="$HOME/.wine-aio-custom"
 G="$PFX/drive_c/BFME1"; AL="$G/arenaapilog.txt"

@@ -104,22 +104,30 @@ cmd_doctor() {
 }
 
 cmd_make_apps() {
-  local apps="$HOME/Applications" name cmd
+  local apps="$HOME/Applications" name cmd bundle spec
+  local lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
   mkdir -p "$apps" || bfme_die "could not create $apps"
   for spec in "BFME Launcher:launcher" "BFME Arena:arena" "BFME Solo:play"; do
     name="${spec%%:*}"; cmd="${spec##*:}"
-    local bundle="$apps/$name.app"
+    bundle="$apps/$name.app"
     rm -rf "$bundle"
-    mkdir -p "$bundle/Contents/MacOS" || bfme_die "could not create $bundle"
+    mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources" \
+      || bfme_die "could not create $bundle"
     cat > "$bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>$name</string>
-  <key>CFBundleIdentifier</key><string>com.bfme-macos.${cmd}</string>
+  <key>CFBundleDisplayName</key><string>$name</string>
+  <key>CFBundleIdentifier</key><string>com.bfme-macos.$cmd</string>
   <key>CFBundleExecutable</key><string>run</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleSignature</key><string>????</string>
+  <key>CFBundleVersion</key><string>1.0</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.strategy-games</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
@@ -128,8 +136,14 @@ PLIST
 exec "$BFME_HOME/bfme" $cmd
 RUNNER
     chmod +x "$bundle/Contents/MacOS/run"
+    # A hand-made bundle is not in the Launch Services database until something
+    # registers it, and Spotlight's app results come from that database, not from
+    # the file index -- without this the apps are findable only as folders.
+    [ -x "$lsregister" ] && "$lsregister" -f "$bundle" >/dev/null 2>&1
     print -r -- "  $bundle"
   done
+  # Nudge the metadata index too, so they show up without waiting.
+  mdimport "$apps" >/dev/null 2>&1 || true
 }
 
 case "${1:-}" in

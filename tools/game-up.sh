@@ -3,7 +3,7 @@
 # Rosetta launch flakiness. Leaves the game running and the pin active.
 set -u
 OUT="${1:?}"; HOLD="${2:-600}"; N="${3:-10}"; mkdir -p "$OUT"
-P=/Users/beanagrammer/Projects/BFME
+P="${0:A:h:h}"
 R="$P/run-custom-wine.sh"; T="$P/tools/wintool/wintool.exe"
 SCR=/private/tmp/claude-501/-Users-beanagrammer-Projects-BFME/8c03f450-31ff-4a41-8e2b-1eb8d873da5e/scratchpad
 G="$HOME/.wine-aio-custom/drive_c/BFME1"; AL="$G/arenaapilog.txt"

@@ -3,7 +3,7 @@
 # Usage: measure-fps.sh <outdir> [attempts]
 set -u
 OUT="${1:?}"; N="${2:-8}"; mkdir -p "$OUT"
-P=/Users/beanagrammer/Projects/BFME
+P="${0:A:h:h}"
 R="$P/run-custom-wine.sh"; T="$P/tools/wintool/wintool.exe"
 SCR=/private/tmp/claude-501/-Users-beanagrammer-Projects-BFME/8c03f450-31ff-4a41-8e2b-1eb8d873da5e/scratchpad
 G="$HOME/.wine-aio-custom/drive_c/BFME1"; AL="$G/arenaapilog.txt"

@@ -8,7 +8,7 @@
 # Usage: skirmish-timer4.sh <outdir> <label>   [env: EXTRA, TOPO]
 set -u
 OUT="${1:?}"; LABEL="${2:-run}"; mkdir -p "$OUT"
-P=/Users/beanagrammer/Projects/BFME
+P="${0:A:h:h}"
 R="$P/run-custom-wine.sh"; T="$P/tools/wintool/wintool.exe"; IS="$P/tools/imgstat.py"
 G="$HOME/.wine-aio-custom/drive_c/BFME1"; LOG="$OUT/${LABEL}.log"; PH="$OUT/${LABEL}_phases.txt"
 W="Battle for Middle-earth"; : > "$PH"

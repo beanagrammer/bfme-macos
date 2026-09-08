@@ -30,7 +30,7 @@ Status legend: ✅ done · 🟡 partial · ❌ blocker
   so it's tied to the overlay injection. Likely needs fixing anyway to make P1 reliable.
 
 Feasibility: the upstream Wine commit that enables the Arena overlay
-(`d3d9: Add a fake d3d9 device vtbl initialization sequence`, author danielginovker@gmail.com,
+(`d3d9: Add a fake d3d9 device vtbl initialization sequence`, author redacted,
 in wine ≥ 11.9) is written *for* "BFME Online Arena" and is already in our build — proof the
 Arena works on Linux Wine and that our rendering/hook layer is correct. P1 is achievable.
 

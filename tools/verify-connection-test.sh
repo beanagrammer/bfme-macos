@@ -4,7 +4,7 @@
 # coordinates assume. Usage: verify-connection-test.sh <outdir> <runs>
 set -u
 OUT="${1:?}"; N="${2:-5}"; mkdir -p "$OUT"
-P=/Users/beanagrammer/Projects/BFME
+P="${0:A:h:h}"
 R="$P/run-custom-wine.sh"; T="$P/tools/wintool/wintool.exe"; W="$P/tools/winlist"
 PFX="$HOME/.wine-aio-custom"; AL="$PFX/drive_c/BFME1/arenaapilog.txt"
 FLAG="$PFX/drive_c/users/beanagrammer/AppData/Roaming/BFME Competetive Arena/Settings/arena_onlineTestCompletedForBFME1.json"
