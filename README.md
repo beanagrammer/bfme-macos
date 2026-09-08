@@ -17,7 +17,7 @@ Measured on an M2 Max, macOS 27, 1728x1117 display:
 ## Install
 
 ```sh
-git clone https://github.com/YOUR-USER/bfme-macos.git
+git clone https://github.com/beanagrammer/bfme-macos.git
 cd bfme-macos
 ./install.sh
 ```

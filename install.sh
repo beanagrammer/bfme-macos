@@ -1,7 +1,7 @@
 #!/bin/zsh
 # One-time setup for BFME on macOS.
 #
-#   git clone https://github.com/YOUR-USER/bfme-macos.git
+#   git clone https://github.com/beanagrammer/bfme-macos.git
 #   cd bfme-macos && ./install.sh
 #
 # Installs a patched Wine, creates a prefix, runs the official All in One

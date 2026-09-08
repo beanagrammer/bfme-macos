@@ -31,6 +31,6 @@ tested from three different directories.
 ## Later: a Homebrew tap
 
 A cask would remove the clone-and-run step and handle updates:
-`brew tap YOUR-USER/bfme && brew install --cask bfme-macos`. The cask would
+`brew tap beanagrammer/bfme && brew install --cask bfme-macos`. The cask would
 depend on Rosetta, fetch the same release asset, and run `install.sh --no-wine`.
 Not built yet.
