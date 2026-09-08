@@ -67,7 +67,7 @@ index 0000000000..d75777e863
 +
 +#endif  // X87SIDECAR_COOP_PROTO_H
 diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
-index 0d43c5c65e..71bf3d4948 100644
+index 0d43c5c65e..f96610f2a9 100644
 --- a/dlls/ntdll/unix/loader.c
 +++ b/dlls/ntdll/unix/loader.c
 @@ -69,6 +69,9 @@
@@ -80,7 +80,7 @@ index 0d43c5c65e..71bf3d4948 100644
  # include <crt_externs.h>
  # ifndef _POSIX_SPAWN_DISABLE_ASLR
  #  define _POSIX_SPAWN_DISABLE_ASLR 0x0100
-@@ -437,6 +440,30 @@ char *get_alternate_wineloader( WORD machine )
+@@ -437,6 +440,37 @@ char *get_alternate_wineloader( WORD machine )
  
  static void preloader_exec( char **argv )
  {
@@ -91,7 +91,14 @@ index 0d43c5c65e..71bf3d4948 100644
 +     * is lost with the old image. x87_cooperative_handshake() is the other half. */
 +    {
 +        const char *rosetta_path = getenv( "ROSETTA_X87_PATH" );
-+        if (rosetta_path && argv[1] && !getenv( "X87_SIDECAR_ACTIVE" ))
++
++        /* Only wrap a loader that actually exists.  exec_wineloader() probes the
++         * alternate (wow64) loader first and relies on that execv failing so it
++         * can fall back; in an installed tree that path is absent.  Re-execing
++         * through the sidecar there replaces us with a process that fails the
++         * same exec and dies, instead of returning for the fallback. */
++        if (rosetta_path && argv[1] && access( argv[1], X_OK ) == 0 &&
++            !getenv( "X87_SIDECAR_ACTIVE" ))
 +        {
 +            static char coop_flag[] = "--cooperative";
 +            char **coop_argv;
@@ -111,7 +118,7 @@ index 0d43c5c65e..71bf3d4948 100644
  #ifdef HAVE_WINE_PRELOADER
      asprintf( &argv[0], "%s-preloader", argv[1] );
  #ifdef __APPLE__
-@@ -2101,6 +2128,113 @@ static void check_command_line( int argc, char *argv[] )
+@@ -2101,6 +2135,113 @@ static void check_command_line( int argc, char *argv[] )
  }
  
  
@@ -225,7 +232,7 @@ index 0d43c5c65e..71bf3d4948 100644
  /***********************************************************************
   *           __wine_main
   *
-@@ -2111,6 +2245,12 @@ DECLSPEC_EXPORT void __wine_main( int argc, char *argv[] )
+@@ -2111,6 +2252,12 @@ DECLSPEC_EXPORT void __wine_main( int argc, char *argv[] )
      main_argc = argc;
      main_argv = argv;
  

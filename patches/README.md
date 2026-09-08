@@ -53,6 +53,13 @@ requests.
 
 **Measured.** Skirmish load 470s → 19s. In-game 20fps → 38fps (the engine's cap).
 
+**Gotcha this patch has to respect.** `exec_wineloader()` probes the alternate
+(wow64) loader first and *relies on that `execv` failing* so it can fall back to
+the real one. In an installed tree that path does not exist. Re-execing through
+the sidecar there replaces the process with one that fails the same exec and
+dies, so the re-exec is guarded on `access(argv[1], X_OK)`. Invisible in a build
+tree, fatal in an installed one.
+
 **Upstream status.** Not submittable as-is: it depends on an external binary. It
 is here so the build is reproducible, and it is the same approach CrossOver
 ships.
