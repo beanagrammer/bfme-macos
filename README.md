@@ -11,26 +11,47 @@ Measured on an M2 Max, macOS 27, 1728x1117 display:
 | Graphics | UltraHigh, 2560x1440 |
 | Skirmish load | 19.3 s |
 | In-game frame rate | 38.3 fps (the engine's cap) |
-| Arena connection test | 7/7 passes |
+| Arena connection test | 11/11 passes, including from the packaged build |
 | Display | full width, nothing clipped, macOS resolution never changed |
 
-## Requirements
-
-- Apple Silicon Mac with Rosetta 2 installed (`softwareupdate --install-rosetta`)
-- BFME 1 with patch 2.22 and the BFME Online Arena, installed through the
-  [All in One Launcher](https://github.com/MarcellVokk/aio-launcher) into a Wine
-  prefix (default here: `~/.wine-aio-custom`)
-- The patched Wine build — see [Building](#building)
-
-## Playing
+## Install
 
 ```sh
-./arena-bfme.sh     # ranked multiplayer through the Online Arena
-./play-bfme.sh      # solo skirmish / campaign
+git clone https://github.com/YOUR-USER/bfme-macos.git
+cd bfme-macos
+./install.sh
 ```
 
-Both scripts configure Wine and launch. They never change your macOS display
-resolution.
+That downloads a patched Wine (97 MB), creates a prefix, runs the official
+All in One Launcher installer inside it, and puts three apps in `~/Applications`:
+
+| | |
+|---|---|
+| **BFME Launcher** | install and patch the game, mods, maps — open this first |
+| **BFME Arena** | ranked multiplayer |
+| **BFME Solo** | skirmish and campaign |
+
+Everything lives in `~/Library/Application Support/bfme-macos`. Nothing is
+installed system-wide and your display settings are never changed. To remove it,
+delete that folder and the three apps.
+
+Command line equivalent, if you prefer:
+
+```sh
+bfme launcher | arena | play | doctor
+```
+
+`bfme doctor` prints what it found and what is missing — start there if something
+looks wrong.
+
+### Requirements
+
+- Apple Silicon Mac with Rosetta 2 (`softwareupdate --install-rosetta --agree-to-license`)
+- A legitimate copy of BFME 1. The launcher installs patch 2.22 and the Arena;
+  it does not provide the game itself.
+
+Nothing here redistributes EA's game or the All in One Launcher — the installer
+fetches the launcher from bfmeladder.com, the same place its Windows users get it.
 
 ## Why it needs any of this
 
@@ -57,7 +78,10 @@ Three problems had to be solved, and each has a patch in [`patches/`](patches/RE
 [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) has the details, including the
 Arena's game-side protocol.
 
-## Building
+## Building Wine yourself
+
+The release bundle is built from Wine 11.17 with the three patches in
+[`patches/`](patches/README.md):
 
 ```sh
 git clone https://gitlab.winehq.org/wine/wine.git
@@ -73,28 +97,28 @@ cd .. && mkdir build-wine && cd build-wine
   --without-opengl --with-mingw --with-vulkan --with-coreaudio \
   --with-freetype --with-gnutls --with-sdl
 make -j8
+cd .. && ./dist/package-wine.sh
 ```
 
-`run-custom-wine.sh` expects the result in `build-wine/` and the x86_64 support
-libraries (freetype, gnutls, MoltenVK, SDL) in `deps-x86_64/lib`. Never wrap it
-in `nohup`: that is SIP-protected and strips `DYLD_LIBRARY_PATH`, after which
-WPF applications crash in font code.
+You also need the x86_64 support libraries (freetype, gnutls, MoltenVK, SDL) in
+`deps-x86_64/lib`. [`dist/RELEASING.md`](dist/RELEASING.md) covers publishing the
+result.
 
-x87sidecar binaries live in `tools/x87sidecar/`; set `BFME_NO_X87=1` to run
-without it.
+Never wrap the Wine wrapper in `nohup`: that is SIP-protected and strips
+`DYLD_LIBRARY_PATH`, after which WPF applications crash in font code.
 
 ## Layout
 
 ```
-arena-bfme.sh        launch the Online Arena (ranked)
-play-bfme.sh         launch BFME 1 directly (solo)
-bfme-config.sh       shared setup: display scale, virtual desktop, Options.ini
-run-custom-wine.sh   Wine wrapper (prefix, library path, x87sidecar)
+install.sh           one-time setup
+bfme                 the CLI everything else goes through
+bfme-config.sh       locating Wine and the prefix, plus the display configuration
+dist/                packaging the redistributable Wine bundle, and how to release it
 patches/             the three Wine patches, with what each fixes and why
 docs/                findings, including the Arena's game-side protocol
 tools/               diagnostics that are still useful; tools/archive/ is history
 config/              GameLOD override for lower-end machines
 ```
 
-`wine/`, `build-wine/`, `deps-x86_64/` and the game installers are not in git —
-they are large third-party artifacts. See [Building](#building).
+`wine/`, `build-wine/`, `deps-x86_64/`, the game installers and the release
+tarball are not in git — they are large third-party or generated artifacts.

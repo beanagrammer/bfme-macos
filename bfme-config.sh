@@ -1,5 +1,6 @@
 #!/bin/zsh
-# Shared setup for both launchers.  Source this, don't run it.
+# Shared setup: locating Wine and the prefix, and the display configuration.
+# Source this, don't run it.
 #
 # BFME under the Arena has one hard constraint: the game must run at 2560x1440.
 # The Arena drives the game by sending absolute screen coordinates over a named
@@ -8,7 +9,7 @@
 # resolution the automation hovers empty space, the button never highlights, and
 # the Arena gives up with "Failed to start the game: A task was canceled".
 #
-# So the resolution is fixed and the *display* has to adapt instead:
+# So the resolution is fixed and the *display* adapts instead:
 #   - a 2560x1440 Wine virtual desktop gives the Arena the coordinate space it wants
 #   - RetinaScale shrinks that desktop to fit the Mac screen without changing the
 #     game's resolution and without touching the macOS display mode
@@ -16,21 +17,83 @@
 #     would shift every coordinate down by the menu bar height and break the same
 #     automation
 set -u
-BFME_ROOT="${BFME_ROOT:-${0:A:h}}"
-WINE="$BFME_ROOT/run-custom-wine.sh"
-PREFIX="${WINEPREFIX:-$HOME/.wine-aio-custom}"
-OPTIONS="$PREFIX/drive_c/users/$USER/AppData/Roaming/My Battle for Middle-earth Files/Options.ini"
 
+BFME_APP_SUPPORT="$HOME/Library/Application Support/bfme-macos"
 GAME_W=2560
 GAME_H=1440
 
-bfme_die() { echo "FATAL: $*" >&2; exit 1; }
+bfme_die() { print -r -- "FATAL: $*" >&2; exit 1; }
+
+# Wine: an explicit override, then the installed bundle, then a dev build tree.
+bfme_find_wine() {
+  if [ -n "${BFME_WINE_DIR:-}" ]; then
+    [ -x "$BFME_WINE_DIR/bin/wine" ] || bfme_die "BFME_WINE_DIR has no bin/wine: $BFME_WINE_DIR"
+    print -r -- "$BFME_WINE_DIR"; return
+  fi
+  if [ -x "$BFME_APP_SUPPORT/wine/bin/wine" ]; then
+    print -r -- "$BFME_APP_SUPPORT/wine"; return
+  fi
+  if [ -x "$BFME_HOME/build-wine/loader/wine" ]; then
+    print -r -- "$BFME_HOME/build-wine"; return
+  fi
+  bfme_die "no Wine found. Run ./install.sh, or set BFME_WINE_DIR."
+}
+
+# Prefix: an explicit override, then the prefix an earlier setup left behind,
+# then the default. Always reported so it is never a surprise which one is used.
+bfme_find_prefix() {
+  if [ -n "${BFME_PREFIX:-}" ]; then print -r -- "$BFME_PREFIX"; return; fi
+  if [ -n "${WINEPREFIX:-}" ];   then print -r -- "$WINEPREFIX";   return; fi
+  if [ -d "$HOME/.wine-aio-custom" ]; then print -r -- "$HOME/.wine-aio-custom"; return; fi
+  print -r -- "$BFME_APP_SUPPORT/prefix"
+}
+
+# Run a program under our Wine. Never wrap this in nohup: that is SIP-protected
+# and strips DYLD_LIBRARY_PATH, after which WPF apps crash in font code.
+bfme_wine() {
+  local w="$BFME_WINE_ROOT"
+  local loader="$w/bin/wine"
+  [ -x "$loader" ] || loader="$w/loader/wine"      # dev build tree
+  [ -x "$loader" ] || bfme_die "no wine loader under $w"
+  local deps="$w/deps/lib"
+  [ -d "$deps" ] || deps="$BFME_HOME/deps-x86_64/lib"
+  local sidecar="$w/x87sidecar/x87sidecar"
+  [ -x "$sidecar" ] || sidecar="$BFME_HOME/tools/x87sidecar/x87sidecar"
+
+  (
+    export WINEPREFIX="$BFME_PREFIX_DIR"
+    export DYLD_LIBRARY_PATH="$deps"
+    export WINEDEBUG="${WINEDEBUG:--all}"
+    export MVK_CONFIG_LOG_LEVEL=0
+    # The Arena's relay tries to punch a hole through the router; under Wine
+    # there is no router access and the attempt just hangs.
+    export BFME_PROXY_UPNP=0 BFME_PROXY_NATPMP=0 BFME_PROXY_IPV6=0
+    # Rosetta emulates x87 in software at roughly 1/35th speed and BFME is full
+    # of it; x87sidecar JITs those instructions to ARM64 instead.
+    if [ -z "${BFME_NO_X87:-}" ] && [ -x "$sidecar" ]; then
+      export ROSETTA_X87_PATH="$sidecar"
+    fi
+    exec "$loader" "$@"
+  )
+}
+
+# Wait for the prefix to go idle. wineboot --init returns before wineserver has
+# finished writing the registry, and anything imported in that window is lost.
+bfme_wineserver_wait() {
+  local w="$BFME_WINE_ROOT"
+  local ws="$w/bin/wineserver"
+  [ -x "$ws" ] || ws="$w/server/wineserver"       # dev build tree
+  [ -x "$ws" ] || bfme_die "no wineserver under $w"
+  local deps="$w/deps/lib"
+  [ -d "$deps" ] || deps="$BFME_HOME/deps-x86_64/lib"
+  WINEPREFIX="$BFME_PREFIX_DIR" DYLD_LIBRARY_PATH="$deps" "$ws" -w
+}
 
 # Scale the 2560x1440 desktop down to the largest size that still fits the screen.
 # Both axes are considered so the window never overflows; the larger ratio wins.
 bfme_display_scale() {
   local dims w h
-  dims=$("$BFME_ROOT/tools/listmodes" 2>/dev/null | head -1) \
+  dims=$("$BFME_TOOLS/listmodes" 2>/dev/null | head -1) \
     || bfme_die "could not read the display size (tools/listmodes missing?)"
   w=$(printf '%s\n' "$dims" | sed -n 's/^current: \([0-9]*\) x \([0-9]*\).*/\1/p')
   h=$(printf '%s\n' "$dims" | sed -n 's/^current: \([0-9]*\) x \([0-9]*\).*/\2/p')
@@ -39,46 +102,55 @@ bfme_display_scale() {
     'BEGIN { s = gw / w; t = gh / h; if (t > s) s = t; if (s < 1) s = 1; printf "%.6f", s }'
 }
 
-bfme_configure() {
-  local scale reg shown
+# Wine-side settings. Safe to run against a brand new prefix.
+bfme_configure_wine() {
+  local scale reg shown applied
   scale=$(bfme_display_scale)
   shown=$(awk -v s=$scale -v gw=$GAME_W -v gh=$GAME_H 'BEGIN{printf "%dx%d", gw/s, gh/s}')
-  echo "Display scale $scale: a ${GAME_W}x${GAME_H} game shown at $shown points."
+  print -r -- "  display scale $scale: a ${GAME_W}x${GAME_H} game shown at $shown points"
 
   # One import instead of five "reg add" calls -- each of those is a separate
   # Wine start, which is most of the wait before the window appears.
-  reg=$(mktemp -t bfme-config)   # reused as the .reg file itself
-  cat > "$reg" <<REGEOF
-REGEDIT4
-
-[HKEY_CURRENT_USER\\Software\\Wine\\Mac Driver]
-"RetinaMode"="y"
-"RetinaScale"="$scale"
-"ConstrainWindows"="N"
-
-[HKEY_CURRENT_USER\\Software\\Wine\\Explorer]
-"Desktop"="Default"
-
-[HKEY_CURRENT_USER\\Software\\Wine\\Explorer\\Desktops]
-"Default"="${GAME_W}x${GAME_H}"
-REGEOF
-  "$WINE" regedit /S "$reg" >/dev/null 2>&1 || { rm -f "$reg"; bfme_die "could not import the Wine settings"; }
+  # Built with printf, not a heredoc: getting single backslashes through heredoc
+  # quoting is easy to get wrong, and a .reg file with doubled backslashes is
+  # rejected by regedit with "Unable to open the registry key".
+  reg=$(mktemp -t bfme-config).reg
+  {
+    printf 'REGEDIT4\n\n'
+    printf '[HKEY_CURRENT_USER\\Software\\Wine\\Mac Driver]\n'
+    printf '"RetinaMode"="y"\n'
+    printf '"RetinaScale"="%s"\n' "$scale"
+    printf '"ConstrainWindows"="N"\n\n'
+    printf '[HKEY_CURRENT_USER\\Software\\Wine\\Explorer]\n'
+    printf '"Desktop"="Default"\n\n'
+    printf '[HKEY_CURRENT_USER\\Software\\Wine\\Explorer\\Desktops]\n'
+    printf '"Default"="%sx%s"\n\n' "$GAME_W" "$GAME_H"
+    printf '[HKEY_CURRENT_USER\\Software\\Wine\\Direct3D]\n'
+    printf '"renderer"="gl"\n'
+  } > "$reg"
+  bfme_wine regedit /S "$reg" >/dev/null 2>&1 || { rm -f "$reg"; bfme_die "could not import the Wine settings"; }
   rm -f "$reg"
 
-  # Read it all back in one query rather than trusting the import silently.
-  local applied
-  applied=$("$WINE" reg query 'HKCU\Software\Wine' /s 2>/dev/null) \
-    || bfme_die "could not read back the Wine settings"
+  # Read it all back rather than trusting the import silently.
   # printf, not echo: zsh's echo eats the backslashes in registry paths.
+  applied=$(bfme_wine reg query 'HKCU\Software\Wine' /s 2>/dev/null) \
+    || bfme_die "could not read back the Wine settings"
+  local expect
   for expect in "RetinaMode.*y" "RetinaScale.*$scale" "ConstrainWindows.*N" \
                 "Desktop.*Default" "Default.*${GAME_W}x${GAME_H}"; do
     printf '%s\n' "$applied" | grep -qE "$expect" \
       || bfme_die "Wine setting did not apply: $expect"
   done
+}
 
-  [ -f "$OPTIONS" ] || bfme_die "Options.ini not found at $OPTIONS -- run the game once from the launcher first"
-  sed -i '' "s/^Resolution = .*/Resolution = ${GAME_W} ${GAME_H}/" "$OPTIONS"
-  grep -q "^Resolution = ${GAME_W} ${GAME_H}$" "$OPTIONS" \
+# Game-side settings. Needs the game to have been run once so Options.ini exists.
+bfme_configure_game() {
+  local options="$BFME_PREFIX_DIR/drive_c/users/$USER/AppData/Roaming/My Battle for Middle-earth Files/Options.ini"
+  [ -f "$options" ] || bfme_die "Options.ini not found at
+    $options
+  Open the launcher and start BFME 1 once so the game writes it."
+  sed -i '' "s/^Resolution = .*/Resolution = ${GAME_W} ${GAME_H}/" "$options"
+  grep -q "^Resolution = ${GAME_W} ${GAME_H}$" "$options" \
     || bfme_die "Options.ini Resolution was not set"
 }
 

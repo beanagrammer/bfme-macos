@@ -14,3 +14,6 @@ tools/__pycache__/
 *.o
 *.dSYM/
 tools/archive/splash-ref.png
+
+# The Wine bundle is a release asset, not a git object
+dist/*.tar.zst

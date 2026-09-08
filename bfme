@@ -1,0 +1,147 @@
+#!/bin/zsh
+# BFME on macOS.
+#
+#   bfme launcher    the All in One Launcher: install/patch the game, mods, maps
+#   bfme arena       ranked multiplayer through the Online Arena
+#   bfme play        BFME 1 directly (skirmish, campaign)
+#   bfme doctor      check the installation and print what it found
+#   bfme run <exe>   run any Windows program in the prefix
+#   bfme bootstrap   create/refresh the prefix and its settings
+#   bfme make-apps   (re)create the apps in ~/Applications
+#
+# Your macOS display resolution is never changed.
+set -u
+BFME_SELF="${0:A}"          # zsh rebinds $0 inside functions, so capture it now
+BFME_HOME="${BFME_SELF:h}"
+BFME_TOOLS="$BFME_HOME/tools"
+source "$BFME_HOME/bfme-config.sh"
+
+BFME_WINE_ROOT=$(bfme_find_wine)   || exit 1
+BFME_PREFIX_DIR=$(bfme_find_prefix)
+
+ARENA_EXE="C:\\users\\$USER\\AppData\\Roaming\\BFME Competetive Arena\\BfmeFoundationProject_OnlineArena.exe"
+LAUNCHER_EXE="C:\\users\\$USER\\AppData\\Roaming\\BFME All In One Launcher\\AllInOneLauncher.exe"
+
+usage() { sed -n '2,12p' "$BFME_SELF" | sed 's/^# \{0,1\}//'; }
+
+cmd_bootstrap() {
+  print -r -- "Prefix: $BFME_PREFIX_DIR"
+  if [ ! -f "$BFME_PREFIX_DIR/system.reg" ]; then
+    print -r -- "  creating it (first run takes a minute)"
+    mkdir -p "$BFME_PREFIX_DIR" || bfme_die "could not create $BFME_PREFIX_DIR"
+    bfme_wine wineboot --init >/dev/null 2>&1 || bfme_die "wineboot failed"
+    bfme_wineserver_wait
+    [ -f "$BFME_PREFIX_DIR/system.reg" ] || bfme_die "the prefix was not created"
+  fi
+  bfme_configure_wine
+  print -r -- "  ready"
+}
+
+cmd_launcher() {
+  bfme_stop_wine
+  bfme_configure_wine
+  exec_in_prefix "$LAUNCHER_EXE" "the All in One Launcher"
+}
+
+cmd_arena() {
+  bfme_stop_wine
+  bfme_configure_wine
+  bfme_configure_game
+  exec_in_prefix "$ARENA_EXE" "the Online Arena"
+}
+
+cmd_play() {
+  local game="$BFME_PREFIX_DIR/drive_c/BFME1/lotrbfme.exe"
+  [ -x "$game" ] || bfme_die "BFME 1 not found at $game -- install it from 'bfme launcher' first"
+  bfme_stop_wine
+  bfme_configure_wine
+  bfme_configure_game
+  print -r -- "Launching BFME 1..."
+  cd "${game:h}" || bfme_die "could not enter ${game:h}"
+  bfme_wine "$game" -noshellmap
+}
+
+exec_in_prefix() {
+  local target="$1" what="$2"
+  print -r -- "Launching $what..."
+  bfme_wine "$target"
+}
+
+cmd_run() {
+  [ $# -ge 1 ] || bfme_die "usage: bfme run <program.exe> [args...]"
+  bfme_wine "$@"
+}
+
+cmd_doctor() {
+  local ok=1
+  print -r -- "bfme doctor"
+  print -r -- "  machine        $(sw_vers -productVersion) / $(uname -m)"
+  if /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
+    print -r -- "  rosetta 2      present"
+  else
+    print -r -- "  rosetta 2      MISSING -- softwareupdate --install-rosetta --agree-to-license"; ok=0
+  fi
+  print -r -- "  wine           $BFME_WINE_ROOT"
+  local ver
+  ver=$(bfme_wine --version 2>/dev/null) && print -r -- "                 $ver" \
+    || { print -r -- "                 DOES NOT RUN"; ok=0; }
+  print -r -- "  prefix         $BFME_PREFIX_DIR"
+  [ -f "$BFME_PREFIX_DIR/system.reg" ] || { print -r -- "                 not created yet -- run 'bfme bootstrap'"; ok=0; }
+  print -r -- "  display        $("$BFME_TOOLS/listmodes" 2>/dev/null | head -1 | sed 's/^current: //')"
+  print -r -- "  scale          $(bfme_display_scale 2>/dev/null || echo '?')"
+  local sc
+  sc=$(bfme_display_scale 2>/dev/null) && \
+    print -r -- "  game shown at  $(awk -v s=$sc 'BEGIN{printf "%dx%d points", 2560/s, 1440/s}')"
+  local rel label
+  for entry in "drive_c/BFME1/lotrbfme.exe|BFME 1" \
+               "drive_c/users/$USER/AppData/Roaming/BFME All In One Launcher/AllInOneLauncher.exe|launcher" \
+               "drive_c/users/$USER/AppData/Roaming/BFME Competetive Arena/BfmeFoundationProject_OnlineArena.exe|arena"; do
+    rel="${entry%%|*}"; label="${entry##*|}"
+    if [ -e "$BFME_PREFIX_DIR/$rel" ]; then printf '  %-14s installed\n' "$label"
+    else printf '  %-14s not installed\n' "$label"; ok=0; fi
+  done
+  [ $ok -eq 1 ] || { print -r -- ""; print -r -- "Something above needs fixing."; return 1; }
+}
+
+cmd_make_apps() {
+  local apps="$HOME/Applications" name cmd
+  mkdir -p "$apps" || bfme_die "could not create $apps"
+  for spec in "BFME Launcher:launcher" "BFME Arena:arena" "BFME Solo:play"; do
+    name="${spec%%:*}"; cmd="${spec##*:}"
+    local bundle="$apps/$name.app"
+    rm -rf "$bundle"
+    mkdir -p "$bundle/Contents/MacOS" || bfme_die "could not create $bundle"
+    cat > "$bundle/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>$name</string>
+  <key>CFBundleIdentifier</key><string>com.bfme-macos.${cmd}</string>
+  <key>CFBundleExecutable</key><string>run</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict></plist>
+PLIST
+    cat > "$bundle/Contents/MacOS/run" <<RUNNER
+#!/bin/zsh
+exec "$BFME_HOME/bfme" $cmd
+RUNNER
+    chmod +x "$bundle/Contents/MacOS/run"
+    print -r -- "  $bundle"
+  done
+}
+
+case "${1:-}" in
+  launcher)   cmd_launcher ;;
+  arena)      cmd_arena ;;
+  play)       cmd_play ;;
+  doctor)     cmd_doctor ;;
+  bootstrap)  cmd_bootstrap ;;
+  make-apps)  cmd_make_apps ;;
+  prefix-path) print -r -- "$BFME_PREFIX_DIR" ;;
+  wine-path)  print -r -- "$BFME_WINE_ROOT" ;;
+  run)        shift; cmd_run "$@" ;;
+  ""|-h|--help|help) usage ;;
+  *)          print -r -- "unknown command: $1" >&2; usage >&2; exit 2 ;;
+esac
