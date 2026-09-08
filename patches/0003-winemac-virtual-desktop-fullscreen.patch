@@ -1,0 +1,338 @@
+diff --git a/dlls/winemac.drv/cocoa_app.m b/dlls/winemac.drv/cocoa_app.m
+index 102a5b7070..86aca518fc 100644
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -1438,7 +1438,7 @@ - (void) handleMouseMove:(NSEvent*)anEvent
+             }
+             else
+             {
+-                double scale = retina_on ? 2 : 1;
++                double scale = retina_on ? retina_scale : 1;
+ 
+                 /* Add event delta to accumulated delta error */
+                 /* deltaY is already flipped */
+diff --git a/dlls/winemac.drv/cocoa_cursorclipping.m b/dlls/winemac.drv/cocoa_cursorclipping.m
+index b6151a2c8c..285cb63784 100644
+--- a/dlls/winemac.drv/cocoa_cursorclipping.m
++++ b/dlls/winemac.drv/cocoa_cursorclipping.m
+@@ -103,7 +103,7 @@ static void clip_cursor_location(CGRect cursorClipRect, CGPoint *location)
+ 
+ static void scale_rect_for_retina_mode(BOOL mode, CGRect *cursorClipRect)
+ {
+-    double scale = mode ? 0.5 : 2.0;
++    double scale = mode ? 1.0 / retina_scale : retina_scale;
+     cursorClipRect->origin.x *= scale;
+     cursorClipRect->origin.y *= scale;
+     cursorClipRect->size.width *= scale;
+diff --git a/dlls/winemac.drv/cocoa_window.m b/dlls/winemac.drv/cocoa_window.m
+index 9672c3c952..b7c1f26f3d 100644
+--- a/dlls/winemac.drv/cocoa_window.m
++++ b/dlls/winemac.drv/cocoa_window.m
+@@ -107,6 +107,30 @@ static BOOL frame_intersects_screens(NSRect frame, NSArray* screens)
+ }
+ 
+ 
++/* A window spanning a screen's full width and reaching its top edge needs the
++   same window level as a fullscreen one: at the normal level the menu bar is
++   drawn over its top rows.  Only used when ConstrainWindows is off, i.e. when
++   the windows are deliberately placed exactly where Win32 puts them, so the
++   window really is meant to start at the very top-left of the screen. */
++static NSScreen* screen_topped_by_rect(NSRect rect, NSArray* screens)
++{
++    /* Window frames are fractional, and a scaled desktop lands a fraction of a
++       point short of the screen edge, so compare with a one point tolerance
++       rather than exactly. */
++    static const CGFloat tolerance = 1.0;
++
++    for (NSScreen* screen in screens)
++    {
++        NSRect frame = [screen frame];
++        if (NSMinX(rect) <= NSMinX(frame) + tolerance &&
++            NSMaxX(rect) >= NSMaxX(frame) - tolerance &&
++            NSMaxY(rect) >= NSMaxY(frame) - tolerance)
++            return screen;
++    }
++    return nil;
++}
++
++
+ /* We rely on the supposedly device-dependent modifier flags to distinguish the
+    keys on the left side of the keyboard from those on the right.  Some event
+    sources don't set those device-depdendent flags.  If we see a device-independent
+@@ -590,7 +614,7 @@ - (void) addCALayerHostViewWithContextId:(CAContextID)contextId
+         CALayerHost* host = [CALayerHost layer];
+         [host setContextId:contextId];
+         host.magnificationFilter = kCAFilterNearest;
+-        host.contentsScale = retina_on ? 2.0 : 1.0;
++        host.contentsScale = retina_on ? retina_scale : 1.0;
+         host.frame = self.layer.bounds;
+         host.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
+ 
+@@ -895,7 +919,7 @@ - (CALayer*) makeBackingLayer
+         layer.framebufferOnly = YES;
+         layer.magnificationFilter = kCAFilterNearest;
+         layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
+-        layer.contentsScale = retina_on ? 2.0 : 1.0;
++        layer.contentsScale = retina_on ? retina_scale : 1.0;
+         return layer;
+     }
+ 
+@@ -1806,7 +1830,9 @@ - (void) doOrderOut
+     - (void) updateFullscreen
+     {
+         NSRect contentRect = [self contentRectForFrameRect:self.wine_fractionalFrame];
+-        BOOL nowFullscreen = !([self styleMask] & NSWindowStyleMaskFullScreen) && screen_covered_by_rect(contentRect, [NSScreen screens]);
++        BOOL nowFullscreen = !([self styleMask] & NSWindowStyleMaskFullScreen) &&
++                             (screen_covered_by_rect(contentRect, [NSScreen screens]) ||
++                              (!constrain_windows && screen_topped_by_rect(contentRect, [NSScreen screens])));
+ 
+         if (nowFullscreen != fullscreen)
+         {
+@@ -2290,7 +2316,8 @@ - (NSRect) constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen *)screen
+         // it.
+         NSArray* screens = [NSScreen screens];
+         NSRect contentRect = [self contentRectForFrameRect:frameRect];
+-        if (!screen_covered_by_rect(contentRect, screens) &&
++        if (constrain_windows &&
++            !screen_covered_by_rect(contentRect, screens) &&
+             frame_intersects_screens(frameRect, screens))
+             frameRect = [super constrainFrameRect:frameRect toScreen:screen];
+         return frameRect;
+@@ -3832,7 +3859,7 @@ - (instancetype) initWithHwnd:(void*)newHwnd bounds:(CGRect)bounds
+     offscreen_layer.framebufferOnly = YES;
+     offscreen_layer.magnificationFilter = kCAFilterNearest;
+     offscreen_layer.backgroundColor = CGColorGetConstantColor(kCGColorBlack);
+-    offscreen_layer.contentsScale = retina_on ? 2.0 : 1.0;
++    offscreen_layer.contentsScale = retina_on ? retina_scale : 1.0;
+     [offscreen_layer setBounds:cgrect_mac_from_win(bounds)];
+     [offscreen_layer setAnchorPoint:CGPointMake(0, 0)];
+ 
+diff --git a/dlls/winemac.drv/display.c b/dlls/winemac.drv/display.c
+index 69e0a4338b..d0a49f571b 100644
+--- a/dlls/winemac.drv/display.c
++++ b/dlls/winemac.drv/display.c
+@@ -417,8 +417,8 @@ static CFDictionaryRef create_mode_dict(CGDisplayModeRef display_mode, BOOL is_o
+ 
+     if (retina_enabled && is_original)
+     {
+-        width *= 2;
+-        height *= 2;
++        width = lround(width * retina_scale);
++        height = lround(height * retina_scale);
+     }
+ 
+     io_flags &= kDisplayModeInterlacedFlag | kDisplayModeStretchedFlag | kDisplayModeTelevisionFlag;
+@@ -708,8 +708,8 @@ static CGDisplayModeRef find_best_display_mode(DEVMODEW *devmode, CFArrayRef dis
+ 
+         if (is_original && retina_enabled)
+         {
+-            width *= 2;
+-            height *= 2;
++            width = lround(width * retina_scale);
++            height = lround(height * retina_scale);
+         }
+ 
+         if (bpp != mode_bpp)
+@@ -849,8 +849,8 @@ static DEVMODEW *display_get_modes(CGDirectDisplayID display_id, int *modes_coun
+ 
+         if (retina_enabled && display_mode_matches_descriptor(mode, desc))
+         {
+-            devmodes[i].dmPelsWidth *= 2;
+-            devmodes[i].dmPelsHeight *= 2;
++            devmodes[i].dmPelsWidth = lround(devmodes[i].dmPelsWidth * retina_scale);
++            devmodes[i].dmPelsHeight = lround(devmodes[i].dmPelsHeight * retina_scale);
+         }
+     }
+     free_display_mode_descriptor(desc);
+@@ -896,8 +896,8 @@ static void display_get_current_mode(struct macdrv_monitor *monitor, DEVMODEW *d
+         struct display_mode_descriptor *desc = create_original_display_mode_descriptor(display_id);
+         if (display_mode_matches_descriptor(display_mode, desc))
+         {
+-            devmode->dmPelsWidth *= 2;
+-            devmode->dmPelsHeight *= 2;
++            devmode->dmPelsWidth = lround(devmode->dmPelsWidth * retina_scale);
++            devmode->dmPelsHeight = lround(devmode->dmPelsHeight * retina_scale);
+         }
+         free_display_mode_descriptor(desc);
+     }
+diff --git a/dlls/winemac.drv/gdi.c b/dlls/winemac.drv/gdi.c
+index 906bb4d09e..aa3a318f0d 100644
+--- a/dlls/winemac.drv/gdi.c
++++ b/dlls/winemac.drv/gdi.c
+@@ -49,6 +49,8 @@ static int vert_size;           /* vert. size of screen in millimeters */
+ static bool device_data_valid;  /* do the above variables have up-to-date values? */
+ 
+ bool retina_on = false;
++double retina_scale = 2.0;
++bool constrain_windows = true;
+ 
+ static pthread_mutex_t device_data_mutex = PTHREAD_MUTEX_INITIALIZER;
+ 
+@@ -219,7 +221,15 @@ static INT macdrv_GetDeviceCaps(PHYSDEV dev, INT cap)
+         pthread_mutex_unlock(&device_data_mutex);
+         dev = GET_NEXT_PHYSDEV( dev, pGetDeviceCaps );
+         ret = dev->funcs->pGetDeviceCaps( dev, cap );
+-        if ((cap == HORZRES || cap == VERTRES) && retina_on)
++        /* In Retina mode the Win32 screen is expressed in backing pixels, so
++         * HORZRES/VERTRES have to be scaled up from the value the next driver
++         * reports.  That is only true while that value comes from the display
++         * itself: with a virtual desktop it is already in Win32 pixels, and
++         * doubling it again leaves HORZRES at twice SM_CXSCREEN.  Applications
++         * that size themselves (or their input) from GetDeviceCaps then work in
++         * a coordinate space twice the size of the actual screen. */
++        if ((cap == HORZRES || cap == VERTRES) && retina_on &&
++            ret != NtUserGetSystemMetrics( cap == HORZRES ? SM_CXSCREEN : SM_CYSCREEN ))
+             ret *= 2;
+         return ret;
+     }
+diff --git a/dlls/winemac.drv/macdrv_cocoa.h b/dlls/winemac.drv/macdrv_cocoa.h
+index 9a91edbe8e..7b51c6f1b0 100644
+--- a/dlls/winemac.drv/macdrv_cocoa.h
++++ b/dlls/winemac.drv/macdrv_cocoa.h
+@@ -128,16 +128,18 @@
+ extern CFDictionaryRef localized_strings;
+ extern bool retina_enabled;  /* Whether Retina mode is enabled via registry setting. */
+ extern bool retina_on;       /* Whether Retina mode is currently active (enabled and display is in default mode). */
++extern double retina_scale;  /* Win32 pixels per Cocoa point while Retina mode is active (RetinaScale, default 2). */
++extern bool constrain_windows; /* Whether Cocoa may push windows out from under the menu bar (ConstrainWindows). */
+ extern bool enable_app_nap;
+ 
+ static inline CGRect cgrect_mac_from_win(CGRect rect)
+ {
+     if (retina_on)
+     {
+-        rect.origin.x /= 2;
+-        rect.origin.y /= 2;
+-        rect.size.width /= 2;
+-        rect.size.height /= 2;
++        rect.origin.x /= retina_scale;
++        rect.origin.y /= retina_scale;
++        rect.size.width /= retina_scale;
++        rect.size.height /= retina_scale;
+     }
+ 
+     return rect;
+@@ -147,10 +149,10 @@ static inline CGRect cgrect_win_from_mac(CGRect rect)
+ {
+     if (retina_on)
+     {
+-        rect.origin.x *= 2;
+-        rect.origin.y *= 2;
+-        rect.size.width *= 2;
+-        rect.size.height *= 2;
++        rect.origin.x *= retina_scale;
++        rect.origin.y *= retina_scale;
++        rect.size.width *= retina_scale;
++        rect.size.height *= retina_scale;
+     }
+ 
+     return rect;
+@@ -160,8 +162,8 @@ static inline CGSize cgsize_mac_from_win(CGSize size)
+ {
+     if (retina_on)
+     {
+-        size.width /= 2;
+-        size.height /= 2;
++        size.width /= retina_scale;
++        size.height /= retina_scale;
+     }
+ 
+     return size;
+@@ -171,8 +173,8 @@ static inline CGSize cgsize_win_from_mac(CGSize size)
+ {
+     if (retina_on)
+     {
+-        size.width *= 2;
+-        size.height *= 2;
++        size.width *= retina_scale;
++        size.height *= retina_scale;
+     }
+ 
+     return size;
+@@ -182,8 +184,8 @@ static inline CGPoint cgpoint_mac_from_win(CGPoint point)
+ {
+     if (retina_on)
+     {
+-        point.x /= 2;
+-        point.y /= 2;
++        point.x /= retina_scale;
++        point.y /= retina_scale;
+     }
+ 
+     return point;
+@@ -193,8 +195,8 @@ static inline CGPoint cgpoint_win_from_mac(CGPoint point)
+ {
+     if (retina_on)
+     {
+-        point.x *= 2;
+-        point.y *= 2;
++        point.x *= retina_scale;
++        point.y *= retina_scale;
+     }
+ 
+     return point;
+diff --git a/dlls/winemac.drv/macdrv_main.c b/dlls/winemac.drv/macdrv_main.c
+index 96168242cc..09b9829ce6 100644
+--- a/dlls/winemac.drv/macdrv_main.c
++++ b/dlls/winemac.drv/macdrv_main.c
+@@ -271,6 +271,33 @@ static inline DWORD get_config_key(HKEY defkey, HKEY appkey, const char *name,
+ }
+ 
+ 
++/***********************************************************************
++ *              parse_decimal
++ *
++ * Parse a non-negative decimal number out of a registry string.  Returns 0 for
++ * anything that is not one, which every caller treats as "out of range".
++ */
++static double parse_decimal(const WCHAR *str)
++{
++    double whole = 0, frac = 0, div = 1;
++    const WCHAR *p = str;
++
++    if (!p || !*p) return 0;
++    for (; *p >= '0' && *p <= '9'; p++)
++        whole = whole * 10 + (*p - '0');
++    if (*p == '.' || *p == ',')
++    {
++        for (p++; *p >= '0' && *p <= '9'; p++)
++        {
++            div *= 10;
++            frac = frac * 10 + (*p - '0');
++        }
++    }
++    if (*p) return 0;   /* trailing junk: reject rather than silently truncate */
++    return whole + frac / div;
++}
++
++
+ /***********************************************************************
+  *              setup_options
+  *
+@@ -377,6 +404,26 @@ static void setup_options(void)
+     if (!get_config_key(hkey, NULL, "RetinaMode", buffer, sizeof(buffer)))
+         retina_enabled = IS_OPTION_TRUE(buffer[0]);
+ 
++    /* Retina mode normally means exactly two Win32 pixels per Cocoa point.  A
++       fractional scale lets a fixed-resolution virtual desktop be shown at the
++       size of the Mac screen instead of a half-size window, which matters for
++       games that only run correctly at one resolution. */
++    if (!get_config_key(hkey, NULL, "RetinaScale", buffer, sizeof(buffer)))
++    {
++        double value = parse_decimal(buffer);
++        if (value >= 1.0 && value <= 8.0)
++            retina_scale = value;
++        else
++            ERR("ignoring out-of-range RetinaScale (must be between 1 and 8)\n");
++    }
++
++    /* Cocoa refuses to leave a window underneath the menu bar unless it covers a
++       whole screen, which silently shifts the Win32 origin down.  Applications
++       that drive themselves with absolute screen coordinates then click in the
++       wrong place, so allow that constraint to be turned off. */
++    if (!get_config_key(hkey, appkey, "ConstrainWindows", buffer, sizeof(buffer)))
++        constrain_windows = IS_OPTION_TRUE(buffer[0]);
++
+     retina_on = retina_enabled;
+ 
+     if (appkey) NtClose(appkey);

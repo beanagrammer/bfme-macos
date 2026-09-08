@@ -1,0 +1,16 @@
+# Large third-party artifacts. See README.md -> Building.
+wine/
+build-wine/
+deps-x86_64/
+casklib
+
+# Third-party installers, not ours to redistribute
+AllInOneLauncherSetup.exe
+AllInOneLauncherSetup_new.exe
+OnlinePortal.exe
+
+# Build output
+tools/__pycache__/
+*.o
+*.dSYM/
+tools/archive/splash-ref.png

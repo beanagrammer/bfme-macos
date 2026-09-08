@@ -1,0 +1,106 @@
+diff --git a/dlls/wow64cpu/cpu.c b/dlls/wow64cpu/cpu.c
+index 3d73ff3b3c..2433bb9303 100644
+--- a/dlls/wow64cpu/cpu.c
++++ b/dlls/wow64cpu/cpu.c
+@@ -33,11 +33,14 @@ WINE_DEFAULT_DEBUG_CHANNEL(wow);
+ #pragma pack(push,1)
+ struct thunk_32to64
+ {
+-    BYTE  ljmp;   /* jump far, absolute indirect */
+-    BYTE  modrm;  /* address=disp32, opcode=5 */
+-    DWORD op;
++    /* Rosetta 2 mis-executes the far indirect jump ("ljmp *disp32") this thunk used
++     * to contain: it takes the offset but leaves CS alone, so the 64-bit entry point
++     * ends up executing in 32-bit mode. A far return switches mode reliably. */
++    BYTE  push_cs;    /* push imm32 (the 64-bit code selector) */
++    DWORD cs;
++    BYTE  push_addr;  /* push imm32 (the 64-bit entry point) */
+     DWORD addr;
+-    WORD  cs;
++    BYTE  lret;       /* far return: pops EIP then CS */
+ };
+ struct thunk_opcodes
+ {
+@@ -204,13 +207,20 @@ __ASM_GLOBAL_FUNC( syscall_32to64,
+                    "movl 0xb4(%r13),%ebp\n\t"   /* context->Ebp */
+                    "btrl $0,-4(%r13)\n\t"       /* cpu->Flags & WOW64_CPURESERVED_FLAG_RESET_STATE */
+                    "jc .Lsyscall_32to64_return\n\t"
+-                   "movl 0xb8(%r13),%edx\n\t"   /* context->Eip */
+-                   "movl %edx,(%rsp)\n\t"
++                   "movq %rsp,%r14\n\t"        /* keep the 64-bit stack for the next transition */
++                   "pushfq\n\t"
++                   "popq %rax\n\t"
++                   "movl 0xc8(%r13),%edx\n\t"   /* context->SegSs */
++                   "movq %rdx,0x20(%rsp)\n\t"
++                   "movl 0xc4(%r13),%edx\n\t"   /* context->Esp */
++                   "movq %rdx,0x18(%rsp)\n\t"
++                   "movq %rax,0x10(%rsp)\n\t"   /* EFlags */
+                    "movl 0xbc(%r13),%edx\n\t"   /* context->SegCs */
+-                   "movl %edx,4(%rsp)\n\t"
+-                   "movl 0xc4(%r13),%r14d\n\t"  /* context->Esp */
+-                   "xchgq %r14,%rsp\n\t"
+-                   "ljmp *(%r14)\n"
++                   "movq %rdx,0x8(%rsp)\n\t"
++                   "movl 0xb8(%r13),%edx\n\t"   /* context->Eip */
++                   "movq %rdx,(%rsp)\n\t"
++                   "movl 0xb0(%r13),%eax\n\t"   /* context->Eax */
++                   "iretq\n"
+                    ".Lsyscall_32to64_return:\n\t"
+                    "movq %rsp,%r14\n\t"
+                    "movl 0xa8(%r13),%edx\n\t"   /* context->Edx */
+@@ -264,13 +274,20 @@ __ASM_GLOBAL_FUNC( unix_call_32to64,
+                    "movl %eax,0xb0(%r13)\n\t"   /* context->Eax */
+                    "btrl $0,-4(%r13)\n\t"       /* cpu->Flags & WOW64_CPURESERVED_FLAG_RESET_STATE */
+                    "jc .Lsyscall_32to64_return\n\t"
+-                   "movl 0xb8(%r13),%edx\n\t"   /* context->Eip */
+-                   "movl %edx,(%rsp)\n\t"
++                   "movq %rsp,%r14\n\t"        /* keep the 64-bit stack for the next transition */
++                   "pushfq\n\t"
++                   "popq %rax\n\t"
++                   "movl 0xc8(%r13),%edx\n\t"   /* context->SegSs */
++                   "movq %rdx,0x20(%rsp)\n\t"
++                   "movl 0xc4(%r13),%edx\n\t"   /* context->Esp */
++                   "movq %rdx,0x18(%rsp)\n\t"
++                   "movq %rax,0x10(%rsp)\n\t"   /* EFlags */
+                    "movl 0xbc(%r13),%edx\n\t"   /* context->SegCs */
+-                   "movl %edx,4(%rsp)\n\t"
+-                   "movl 0xc4(%r13),%r14d\n\t"  /* context->Esp */
+-                   "xchgq %r14,%rsp\n\t"
+-                   "ljmp *(%r14)" )
++                   "movq %rdx,0x8(%rsp)\n\t"
++                   "movl 0xb8(%r13),%edx\n\t"   /* context->Eip */
++                   "movq %rdx,(%rsp)\n\t"
++                   "movl 0xb0(%r13),%eax\n\t"   /* context->Eax */
++                   "iretq" )
+ 
+ 
+ /**********************************************************************
+@@ -335,17 +352,17 @@ NTSTATUS WINAPI BTCpuProcessInit(void)
+     cs32_sel = context_i386.SegCs;
+     ss32_sel = context_i386.SegSs;
+ 
+-    thunk->syscall_thunk.ljmp  = 0xff;
+-    thunk->syscall_thunk.modrm = 0x2d;
+-    thunk->syscall_thunk.op    = PtrToUlong( &thunk->syscall_thunk.addr );
+-    thunk->syscall_thunk.addr  = PtrToUlong( syscall_32to64 );
+-    thunk->syscall_thunk.cs    = cs64_sel;
+-
+-    thunk->unix_thunk.ljmp  = 0xff;
+-    thunk->unix_thunk.modrm = 0x2d;
+-    thunk->unix_thunk.op    = PtrToUlong( &thunk->unix_thunk.addr );
+-    thunk->unix_thunk.addr  = PtrToUlong( unix_call_32to64 );
+-    thunk->unix_thunk.cs    = cs64_sel;
++    thunk->syscall_thunk.push_cs   = 0x68;
++    thunk->syscall_thunk.cs        = cs64_sel;
++    thunk->syscall_thunk.push_addr = 0x68;
++    thunk->syscall_thunk.addr      = PtrToUlong( syscall_32to64 );
++    thunk->syscall_thunk.lret      = 0xcb;
++
++    thunk->unix_thunk.push_cs   = 0x68;
++    thunk->unix_thunk.cs        = cs64_sel;
++    thunk->unix_thunk.push_addr = 0x68;
++    thunk->unix_thunk.addr      = PtrToUlong( unix_call_32to64 );
++    thunk->unix_thunk.lret      = 0xcb;
+ 
+     NtProtectVirtualMemory( GetCurrentProcess(), (void **)&thunk, &size, PAGE_EXECUTE_READ, &old_prot );
+     return STATUS_SUCCESS;
