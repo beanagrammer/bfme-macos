@@ -128,7 +128,13 @@ bfme_configure_wine() {
     printf '[HKEY_CURRENT_USER\\Software\\Wine\\Direct3D]\n'
     printf '"renderer"="gl"\n'
   } > "$reg"
-  bfme_wine regedit /S "$reg" >/dev/null 2>&1 || { rm -f "$reg"; bfme_die "could not import the Wine settings"; }
+  local regout
+  regout=$(bfme_wine regedit /S "$reg" 2>&1)
+  if [ $? -ne 0 ]; then
+    rm -f "$reg"
+    bfme_die "could not import the Wine settings:
+    $regout"
+  fi
   rm -f "$reg"
 
   # Read it all back rather than trusting the import silently.
@@ -152,6 +158,74 @@ bfme_configure_game() {
   sed -i '' "s/^Resolution = .*/Resolution = ${GAME_W} ${GAME_H}/" "$options"
   grep -q "^Resolution = ${GAME_W} ${GAME_H}$" "$options" \
     || bfme_die "Options.ini Resolution was not set"
+}
+
+# wineserver publishes its Mach port in the bootstrap namespace of whatever
+# session started it, so a wineserver launched from a terminal is invisible to an
+# app launched from the Dock or Spotlight, and vice versa. Wine then refuses to
+# start with "a wine server seems to be running, but I cannot connect to it".
+# Detect that and clear the unreachable server; a reachable one is left alone,
+# because a cold start costs about 90 seconds.
+bfme_ensure_wineserver() {
+  local probe
+  probe=$(bfme_wine reg query 'HKCU\Software' 2>&1)
+  printf '%s' "$probe" | grep -q "cannot connect to it" || return 0
+
+  print -r -- "  a wineserver from another login session is unreachable; restarting it"
+  pkill -9 -f "$BFME_WINE_ROOT.*wineserver" 2>/dev/null
+  pkill -9 -f "wine/x86_64-unix/wine" 2>/dev/null
+  sleep 3
+  probe=$(bfme_wine reg query 'HKCU\Software' 2>&1)
+  printf '%s' "$probe" | grep -q "cannot connect to it" \
+    && bfme_die "could not reach a wineserver even after restarting it:
+    $probe"
+  return 0
+}
+
+# Bring an already-running Wine program to the front.
+bfme_activate() {
+  local pid
+  pid=$(pgrep -f "$1" | head -1) || return 1
+  [ -n "$pid" ] || return 1
+  osascript -e "tell application \"System Events\" to set frontmost of (first process whose unix id is $pid) to true" \
+    >/dev/null 2>&1
+}
+
+# Guard a launch. Opening an app that is already running should focus it, not
+# restart it -- and two launches racing each other is worse than that, because
+# each one stops Wine first and so kills the other's game.
+# Returns 1 when the caller should not launch.
+bfme_launch_guard() {
+  local pattern="$1" label="$2"
+  local lock="$BFME_APP_SUPPORT/.launching"
+
+  if pgrep -f "$pattern" >/dev/null 2>&1; then
+    bfme_activate "$pattern"
+    print -r -- "$label is already running."
+    return 1
+  fi
+
+  mkdir -p "$BFME_APP_SUPPORT" 2>/dev/null
+  if ! mkdir "$lock" 2>/dev/null; then
+    # A lock older than two minutes is left over from something that died.
+    local age
+    age=$(( $(date +%s) - $(stat -f %m "$lock" 2>/dev/null || echo 0) ))
+    if [ "$age" -lt 120 ]; then
+      print -r -- "another launch is already in progress; giving it a moment."
+      return 1
+    fi
+    print -r -- "clearing a stale launch lock"
+    rmdir "$lock" 2>/dev/null
+    mkdir "$lock" 2>/dev/null || return 1
+  fi
+  # The lock only has to cover the seconds before the game process exists.
+  BFME_LAUNCH_LOCK="$lock"
+  return 0
+}
+
+bfme_launch_unlock() {
+  [ -n "${BFME_LAUNCH_LOCK:-}" ] && rmdir "$BFME_LAUNCH_LOCK" 2>/dev/null
+  BFME_LAUNCH_LOCK=""
 }
 
 # Deliberately does NOT kill wineserver: a cold start costs about 90 seconds and

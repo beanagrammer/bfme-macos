@@ -33,29 +33,39 @@ cmd_bootstrap() {
     bfme_wineserver_wait
     [ -f "$BFME_PREFIX_DIR/system.reg" ] || bfme_die "the prefix was not created"
   fi
+  bfme_ensure_wineserver
   bfme_configure_wine
   print -r -- "  ready"
 }
 
 cmd_launcher() {
+  bfme_launch_guard "AllInOneLauncher.exe" "The All in One Launcher" || return 0
   bfme_stop_wine
+  bfme_ensure_wineserver
   bfme_configure_wine
+  bfme_launch_unlock
   exec_in_prefix "$LAUNCHER_EXE" "the All in One Launcher"
 }
 
 cmd_arena() {
+  bfme_launch_guard "BfmeFoundationProject_OnlineArena.exe" "The Online Arena" || return 0
   bfme_stop_wine
+  bfme_ensure_wineserver
   bfme_configure_wine
   bfme_configure_game
+  bfme_launch_unlock
   exec_in_prefix "$ARENA_EXE" "the Online Arena"
 }
 
 cmd_play() {
   local game="$BFME_PREFIX_DIR/drive_c/BFME1/lotrbfme.exe"
   [ -x "$game" ] || bfme_die "BFME 1 not found at $game -- install it from 'bfme launcher' first"
+  bfme_launch_guard "lotrbfme.exe" "BFME 1" || return 0
   bfme_stop_wine
+  bfme_ensure_wineserver
   bfme_configure_wine
   bfme_configure_game
+  bfme_launch_unlock
   print -r -- "Launching BFME 1..."
   cd "${game:h}" || bfme_die "could not enter ${game:h}"
   bfme_wine "$game" -noshellmap
@@ -104,8 +114,9 @@ cmd_doctor() {
 }
 
 cmd_make_apps() {
-  local apps name cmd bundle spec other
+  local apps name cmd bundle spec other plist
   local lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+  local plistbuddy="/usr/libexec/PlistBuddy"
   # /Applications is where Spotlight and Launch Services expect to find apps, and
   # on a Mac whose owner is an admin it is group-writable without sudo. Fall back
   # to ~/Applications when it is not.
@@ -113,53 +124,45 @@ cmd_make_apps() {
   else apps="$HOME/Applications"; other="/Applications"; fi
   mkdir -p "$apps" || bfme_die "could not create $apps"
   print -r -- "  installing into $apps"
+
   for spec in "BFME Launcher:launcher" "BFME Arena:arena" "BFME Solo:play"; do
     name="${spec%%:*}"; cmd="${spec##*:}"
     bundle="$apps/$name.app"
     rm -rf "$bundle"
-    mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources" \
-      || bfme_die "could not create $bundle"
-    cat > "$bundle/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundleName</key><string>$name</string>
-  <key>CFBundleDisplayName</key><string>$name</string>
-  <key>CFBundleIdentifier</key><string>com.bfme-macos.$cmd</string>
-  <key>CFBundleExecutable</key><string>run</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleSignature</key><string>????</string>
-  <key>CFBundleVersion</key><string>1.0</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>LSMinimumSystemVersion</key><string>13.0</string>
-  <key>LSApplicationCategoryType</key><string>public.app-category.strategy-games</string>
-  <key>NSHighResolutionCapable</key><true/>
-</dict></plist>
-PLIST
-    cat > "$bundle/Contents/MacOS/run" <<RUNNER
-#!/bin/zsh
-exec "$BFME_HOME/bfme" $cmd
-RUNNER
-    chmod +x "$bundle/Contents/MacOS/run"
-    # Classic type/creator file. Still expected by parts of Launch Services.
-    printf 'APPL????' > "$bundle/Contents/PkgInfo"
-    # Ad-hoc signature. An unsigned bundle launches, but macOS treats it as
-    # second class -- among other things it is ranked poorly or skipped in
-    # Spotlight's application results.
+
+    # Built with osacompile rather than by hand. A bundle whose executable is a
+    # shell script is not a real app: it never connects to the window server, so
+    # macOS reports "not responding" and refuses to reopen it. An applet is a
+    # genuine signed Cocoa binary; it spawns the game detached and then quits,
+    # which leaves Wine running and no unresponsive app behind.
+    osacompile -o "$bundle" \
+      -e "do shell script \"'$BFME_HOME/bfme' $cmd > /dev/null 2>&1 &\"" \
+      >/dev/null 2>&1 || bfme_die "could not build $bundle (osacompile failed)"
+
+    plist="$bundle/Contents/Info.plist"
+    "$plistbuddy" -c "Set :CFBundleName $name" "$plist" >/dev/null 2>&1 \
+      || "$plistbuddy" -c "Add :CFBundleName string $name" "$plist" >/dev/null 2>&1
+    "$plistbuddy" -c "Add :CFBundleDisplayName string $name" "$plist" >/dev/null 2>&1 \
+      || "$plistbuddy" -c "Set :CFBundleDisplayName $name" "$plist" >/dev/null 2>&1
+    "$plistbuddy" -c "Set :CFBundleIdentifier com.bfme-macos.$cmd" "$plist" >/dev/null 2>&1 \
+      || "$plistbuddy" -c "Add :CFBundleIdentifier string com.bfme-macos.$cmd" "$plist" >/dev/null 2>&1
+    "$plistbuddy" -c "Add :LSApplicationCategoryType string public.app-category.strategy-games" "$plist" >/dev/null 2>&1
+    "$plistbuddy" -c "Add :CFBundleShortVersionString string 1.0" "$plist" >/dev/null 2>&1
+
+    # Editing Info.plist invalidates the signature osacompile applied.
     codesign --force --sign - --timestamp=none "$bundle" >/dev/null 2>&1 \
-      || print -r -- "  (warning: could not ad-hoc sign $name; it will still run)" >&2
-    # A hand-made bundle is not in the Launch Services database until something
-    # registers it, and Spotlight's app results come from that database, not from
-    # the file index -- without this the apps are findable only as folders.
+      || print -r -- "  (warning: could not re-sign $name; it will still run)" >&2
+
+    # A new bundle is not in the Launch Services database until something
+    # registers it, and Spotlight's app results come from that database.
     [ -x "$lsregister" ] && "$lsregister" -f "$bundle" >/dev/null 2>&1
     print -r -- "  $bundle"
   done
+
   # Drop any copy left in the other location so there are not two of each.
   for spec in "BFME Launcher" "BFME Arena" "BFME Solo"; do
     [ -d "$other/$spec.app" ] && { rm -rf "$other/$spec.app"; print -r -- "  removed the stale copy in $other"; }
   done
-  # Nudge the metadata index too, so they show up without waiting.
   mdimport "$apps" >/dev/null 2>&1 || true
 }
 
