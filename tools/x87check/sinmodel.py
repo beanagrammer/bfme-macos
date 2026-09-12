@@ -1,3 +1,29 @@
+"""Bit-exact offline model of the x87sidecar JIT's fsin.
+
+Reproduces the emitted code's arithmetic exactly -- verified against a real run
+on 4000/4000 sampled inputs -- so accuracy experiments take seconds instead of a
+rebuild and a game launch. Feed it the directory holding x87diff.exe output.
+
+    python3 sinmodel.py <dir containing d-jit.txt>
+
+What it established, in order:
+  * the disagreement with real x87 is 49% even for |x| < pi/4, where no range
+    reduction happens at all, so the reduction was never the problem;
+  * with the same coefficients but exact arithmetic the rate is unchanged, so
+    the evaluation rounding was not the problem either -- the coefficients were;
+  * the coefficients are fitted over [0, pi/4] but the reduction uses 1/pi, so
+    the reduced argument really spans [-pi/2, pi/2]. Refitting over the range
+    actually used, plus one term, takes 63.5% -> 14.1% for one extra FMA;
+  * and then it stops. Degree 8 and 9 do not help, an exact reduction does not
+    help, and keeping the reduced argument as a double-double does not help.
+    The floor is the rounding of the correction term r^3*P, which near pi/2 is
+    36% of the result rather than the 8% a pi/4 reduction would give.
+
+Closing the gap needs the standard libm structure: reduce to [-pi/4, pi/4] with
+a quadrant-selected sin/cos pair, and a compensated final combination. Better
+coefficients alone cannot get there, and for a lockstep game a partial
+improvement is worth nothing -- any nonzero rate desynchronises just as surely.
+"""
 import struct, math, sys
 from fractions import Fraction as F
 S = sys.argv[1]
