@@ -1,86 +1,70 @@
-# Patch for x87sidecar (not for Wine)
+# x87sidecar exact-mode attempt — DOES NOT WORK
 
-`x87sidecar-0001-exact-mode.patch` applies to
-[athei/x87sidecar](https://github.com/athei/x87sidecar) at **v1.6.0**, which is
-the release the shipped binary is built from. It adds `X87_EXACT=1`.
+`x87sidecar-0001-exact-mode.patch` applies cleanly to
+[athei/x87sidecar](https://github.com/athei/x87sidecar) at **v1.6.0** and
+produces a sidecar that computes **wrong answers**. It is kept here as a record
+of an approach that fails, and why, so nobody tries it again the same way.
 
-## What it is for
+**Do not install it.**
 
-BFME is a lockstep simulation: only inputs cross the network and every client
-runs the same physics from them. One differing bit puts two clients on different
-timelines and the game calls it out of sync within seconds.
+## What it was trying to do
 
-The JIT is fast because it keeps the x87 stack in ARM double registers. For add,
-sub, mul, div and `fsqrt` that is bit-exact at the `0x027F` control word a
-Windows process runs at, because both round to the same 53-bit result. For the
-transcendentals it is not: the JIT emits its own Cody-Waite reduction and
-polynomial, which lands within a unit in the last place of the true result but
-not on the same value Intel's hardware produces. `tools/x87check/x87exact.exe`
-measures it.
+BFME is a lockstep simulation: one differing bit desynchronises a match. The JIT
+is bit-exact with real x87 for add, sub, mul, div and `fsqrt` at the `0x027F`
+control word Windows runs at, and off by one unit in the last place for every
+transcendental, because it emits its own Cody-Waite reduction and polynomial
+rather than Intel's. `tools/x87check/x87exact.exe` measures it.
 
-`X87_EXACT=1` hands those operations to stock Rosetta and JITs everything else.
+The idea was to hand just those opcodes to stock Rosetta and JIT everything
+else, via a new `X87_EXACT=1`.
 
-## Why it is not just `X87_STOCK_OPS`
+## Why it fails
 
-The sidecar already has `X87_STOCK_OPS`, which looks like the same thing. It
-short-circuits the translate request and replies None without ever entering the
-translator. That leaves deferred stack state which already-emitted code still
-owes, and the result is garbage rather than merely imprecise --
-`tools/x87check/stockops-bug.c` reproduces it, and no other knob avoids it.
+`X87Cache.cpp` says plainly:
 
-The codebase already has the correct mechanism, and its own comment describes
-it: `fclex`, `finit`, `fldenv`, `fstenv`, `fxsave` and `fxrstor` reach stock by
-returning false from `is_handled_x87`, so the run breaks *before* the
-instruction, `x87_end` flushes deferred state, and stock translates it against
-coherent `X87State`. This patch routes the non-exact opcodes the same way, which
-needs both halves: the `is_handled_x87` refusal *and* a `std::nullopt` return in
-the dispatch, since breaking the run does not stop the instruction getting its
-own translate request.
+> There is deliberately no general per-opcode fallback: transcendentals would
+> clash on stock's {x22, w23} helper-call ABI, which is why this list stays
+> short.
 
-`X87Cache.cpp` warns that a general per-opcode fallback would clash with stock's
-`{x22, w23}` helper-call ABI. Measured, it does not: the results come back
-bit-exact and the game runs.
+That is exactly what happens. With the patch applied and `X87_EXACT=1`, the
+refused instructions do not execute at all. `fsin` and `fcos` leave their input
+on the stack unchanged, `fpatan` and `fyl2x` return zeros, and the
+rotate-and-normalise loop in `x87exact.exe` comes back as NaN. The opcodes are
+refused by `is_handled_x87` and returned as `std::nullopt` from the dispatch,
+which is the mechanism `fclex`/`finit`/`fldenv`/`fstenv`/`fxsave`/`fxrstor` use
+correctly — but those are metadata-only ops that do not go through stock's
+helper-call path. The transcendentals do, and composing it does not work.
 
-## Measured
+It is not a subtle failure. It is worse than the divergence it was meant to fix.
 
-Same build, `tools/x87check/x87bench.exe` over 20M iterations, and
-`x87exact.exe` diffed against `BFME_NO_X87=1`:
+## How it briefly looked like it worked
 
-| | throughput | bit-exact at 0x027F |
-| --- | --- | --- |
-| v1.6.0 unmodified | 73.5 Miter/s | no |
-| v1.6.0 + patch, `X87_EXACT` unset | 74.1 Miter/s | no |
-| v1.6.0 + patch, `X87_EXACT=1` | 74.3 Miter/s | **yes** |
-| no JIT at all (`BFME_NO_X87=1`) | 7.8 Miter/s | yes |
+The verification filtered the program's output with `grep -v '^\['` before
+diffing. The section headers it needed to find are `[0x027F 53-bit ...]`, which
+start with `[`, so the filter removed them, the range extraction matched
+nothing, and two empty strings compared equal. The measurement reported
+"bit-exact" while the build was returning NaN.
 
-So exactness is free. The earlier belief that speed and sync were in conflict
-was wrong.
+Two lessons, both now enforced in `bfme doctor`:
 
-## Limits
+- A comparison that can pass by comparing nothing is not a test. Assert the
+  inputs are non-empty first.
+- "Could not measure" must read as unknown, never as passing.
 
-Exactness is established at `0x027F`, 53-bit, which is what Windows and Wine
-both hand a new process. At `0x037F` and `0x003F` the JIT still ignores the
-precision-control field and computes at 53 bits. Nothing here changes that.
+The upstream test suite does not catch this either: 987 passed, 0 failed with
+the patch applied, because nothing in it exercises `X87_EXACT`.
 
-## Building
+## What would actually be needed
 
-Apple's clang 16 cannot compile its own SDK's libc++ headers here
-(`__builtin_ctzg` undeclared); use Homebrew LLVM.
+Making the JIT's transcendentals match Intel bit for bit, in the JIT, rather
+than delegating them. Bochs and QEMU both carry softfloat x87 implementations
+aimed at this. That is a real project, not a knob.
 
-```sh
-git clone https://github.com/athei/x87sidecar && cd x87sidecar
-git checkout v1.6.0
-git apply /path/to/x87sidecar-0001-exact-mode.patch
-cmake -B build -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang \
-               -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++
-cmake --build build -j8
-```
+The separate `X87_STOCK_OPS` bug is still worth reporting upstream on its own:
+see `tools/x87check/stockops-bug.c`.
 
-Note: upstream `master` at 010f50a is about 1.6x slower than v1.6.0 on
-`x87bench` (46 vs 73 Miter/s), unrelated to this patch. Build from the tag.
+## Current state
 
-## Upstreaming
-
-Worth offering upstream, along with the `X87_STOCK_OPS` bug report. Both are
-about the same thing: letting a caller trade a little speed for x87 results that
-match the hardware everyone else is running on.
+Unchanged from before this attempt: the JIT is fast and one ulp off on
+transcendentals. `bfme doctor` now reports that honestly instead of staying
+quiet about it.

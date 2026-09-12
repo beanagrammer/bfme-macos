@@ -1,5 +1,5 @@
 diff --git a/rosetta_core/include/rosetta_core/Config.h b/rosetta_core/include/rosetta_core/Config.h
-index f050610..2b32629 100644
+index 1f0d6f1..d7de98a 100644
 --- a/rosetta_core/include/rosetta_core/Config.h
 +++ b/rosetta_core/include/rosetta_core/Config.h
 @@ -43,6 +43,9 @@ struct RosettaConfig {
@@ -29,7 +29,7 @@ index 3e5047c..c91a5df 100644
  //
  // When consecutive x87 instructions appear in a block, the base address
 diff --git a/rosetta_core/src/ConfigEnv.cpp b/rosetta_core/src/ConfigEnv.cpp
-index 1f7f534..9c71fb8 100644
+index 2819eed..23110d5 100644
 --- a/rosetta_core/src/ConfigEnv.cpp
 +++ b/rosetta_core/src/ConfigEnv.cpp
 @@ -136,6 +136,7 @@ RosettaConfig load_config_from_env() {
@@ -41,10 +41,10 @@ index 1f7f534..9c71fb8 100644
      cfg.enable_fma_contract = env_truthy("X87_ENABLE_FMA_CONTRACT") ? 1 : 0;
      cfg.enable_fma_reduce = env_default_on("X87_ENABLE_FMA_REDUCE");
 diff --git a/rosetta_core/src/Translator.cpp b/rosetta_core/src/Translator.cpp
-index 3f98d76..019cc25 100644
+index e6b15bf..7dafd9a 100644
 --- a/rosetta_core/src/Translator.cpp
 +++ b/rosetta_core/src/Translator.cpp
-@@ -829,12 +829,26 @@ static auto translate_instruction_impl(TranslationResult* translation_result, IR
+@@ -803,12 +803,26 @@ static auto translate_instruction_impl(TranslationResult* translation_result, IR
      // GPRs and no deferred TOP/tag/perm state can exist then — x87_end flushes
      // everything at run end.  Counts into tally_single so profile_analyze
      // stays comparable across configs.
@@ -73,7 +73,7 @@ index 3f98d76..019cc25 100644
          switch (opcode) {
              case Opcode::kOpcodeName_fldz:
 diff --git a/rosetta_core/src/X87Cache.cpp b/rosetta_core/src/X87Cache.cpp
-index 88f59dc..28341f8 100644
+index 6c54557..e448dfe 100644
 --- a/rosetta_core/src/X87Cache.cpp
 +++ b/rosetta_core/src/X87Cache.cpp
 @@ -2,6 +2,8 @@
@@ -85,7 +85,7 @@ index 88f59dc..28341f8 100644
  #include "rosetta_core/IRInstr.h"
  #include "rosetta_core/Opcode.h"
  #include "rosetta_core/X87Bridge.h"
-@@ -36,7 +38,51 @@
+@@ -37,7 +39,51 @@
  // Composing them was empirically validated to corrupt all 8 ST slots.
  // =============================================================================
  
@@ -137,3 +137,18 @@ index 88f59dc..28341f8 100644
      switch (op) {
          case kOpcodeName_fldz:
          case kOpcodeName_fld1:
+diff --git a/rosetta_loader/src/sidecar.cpp b/rosetta_loader/src/sidecar.cpp
+index e105286..52f5ac3 100644
+--- a/rosetta_loader/src/sidecar.cpp
++++ b/rosetta_loader/src/sidecar.cpp
+@@ -2650,7 +2650,9 @@ TranslateOutcome processTranslateRequest(mach_port_t parentTask, const Translate
+         const uint16_t op = localIR[req.insn_idx].opcode();
+         // stock_hash_hit: the None reply is a deliberate whole-block
+         // exclusion, not a missing handler.
+-        const bool deliberate = stock_hash_hit ||
++        // X87_EXACT refuses the opcodes whose results are not bit-identical to
++        // real x87, so those fall through on purpose too.
++        const bool deliberate = stock_hash_hit || (x87_exact_mode() && !is_bit_exact_x87(op)) ||
+                                 std::ranges::find(kKnownFallThrough, op) != kKnownFallThrough.end();
+         if (!deliberate) {
+             const char* name = (op < kOpcodeNames.size()) ? kOpcodeNames[op] : "?";

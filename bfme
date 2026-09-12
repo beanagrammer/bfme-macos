@@ -117,6 +117,30 @@ cmd_doctor() {
       print -r -- "  x87 JIT        could not measure"
     fi
   fi
+  # Speed is not the only thing that can be wrong. BFME is a lockstep
+  # simulation, so if the JIT's results differ from the x87 everyone else runs
+  # on, online games desync within seconds. Compare the bits against Rosetta's
+  # own emulation at the 0x027F control word Windows uses; the other two
+  # precision modes are known to differ and are not what the game runs at.
+  #
+  # The filter must not eat the section headers -- they start with '[' too, and
+  # a filter that removes them makes both sides empty and the check pass by
+  # comparing nothing. That is exactly how a broken build once looked clean.
+  local exact="$BFME_TOOLS/x87check/x87exact.exe" a b
+  if [ -f "$exact" ] && [ -z "${BFME_NO_X87:-}" ]; then
+    a=$(bfme_wine "$exact" 2>/dev/null | grep -vE '^\[(rosettax87|x87stock|x87trace)\]' | sed -n '/0x027F/,/0x037F/p')
+    b=$(BFME_NO_X87=1 bfme_wine "$exact" 2>/dev/null | grep -vE '^\[(rosettax87|x87stock|x87trace)\]' | sed -n '/0x027F/,/0x037F/p')
+    if [ -z "$a" ] || [ -z "$b" ]; then
+      print -r -- "  x87 exactness  COULD NOT MEASURE -- treat as unknown, not as passing"
+    elif [ "$a" = "$b" ]; then
+      print -r -- "  x87 exactness  bit-exact with Rosetta"
+    else
+      local n
+      n=$(diff <(print -r -- "$a") <(print -r -- "$b") | grep -c '^<')
+      print -r -- "  x87 exactness  $n lines differ from real x87 -- online games may desync"
+      print -r -- "                 single player is unaffected. See patches/x87sidecar-README.md"
+    fi
+  fi
   print -r -- "  display        $("$BFME_TOOLS/listmodes" 2>/dev/null | head -1 | sed 's/^current: //')"
   print -r -- "  scale          $(bfme_display_scale 2>/dev/null || echo '?')"
   local sc
