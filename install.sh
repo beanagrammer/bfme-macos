@@ -83,6 +83,7 @@ cp "$REPO/tools/listmodes" "$APP_DIR/tools/" || die "missing tools/listmodes"
 cp "$REPO/tools/backdrop" "$APP_DIR/tools/" || die "missing tools/backdrop"
 cp "$REPO/tools/winlist" "$APP_DIR/tools/" || die "missing tools/winlist"
 cp "$REPO/tools/wintool/wintool.exe" "$APP_DIR/tools/" || die "missing tools/wintool/wintool.exe"
+cp "$REPO/tools/make-icons.py" "$APP_DIR/tools/" || die "missing tools/make-icons.py"
 mkdir -p "$APP_DIR/tools/x87check"
 cp "$REPO/tools/x87check/x87bench.exe" "$APP_DIR/tools/x87check/" \
   || die "missing tools/x87check/x87bench.exe"   # bfme doctor measures the JIT with this

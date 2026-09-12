@@ -134,7 +134,8 @@ cmd_doctor() {
 }
 
 cmd_make_apps() {
-  local apps name cmd bundle spec other plist
+  local apps name cmd icon bundle spec other plist icons
+  local -a parts
   local lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
   local plistbuddy="/usr/libexec/PlistBuddy"
   # /Applications is where Spotlight and Launch Services expect to find apps, and
@@ -145,8 +146,21 @@ cmd_make_apps() {
   mkdir -p "$apps" || bfme_die "could not create $apps"
   print -r -- "  installing into $apps"
 
-  for spec in "BFME Launcher:launcher" "BFME Arena:arena" "BFME Solo:play"; do
-    name="${spec%%:*}"; cmd="${spec##*:}"
+  # The apps show the real game/Arena/launcher artwork, taken from the Windows
+  # executables that are already installed on this Mac. It is extracted here
+  # rather than shipped with this tool because the artwork is not ours to
+  # redistribute. An app with no icon still launches the game, so a failure
+  # here is reported and then stepped over.
+  icons="$BFME_HOME/icons"
+  if [ -f "$BFME_TOOLS/make-icons.py" ]; then
+    python3 "$BFME_TOOLS/make-icons.py" "$icons" \
+      || print -r -- "  (warning: no icons were built, so the apps will look generic)" >&2
+  else
+    print -r -- "  (warning: $BFME_TOOLS/make-icons.py is missing, so the apps will look generic)" >&2
+  fi
+
+  for spec in "BFME Launcher:launcher:launcher" "BFME Arena:arena:arena" "BFME Solo:play:game"; do
+    parts=("${(@s/:/)spec}"); name="$parts[1]"; cmd="$parts[2]"; icon="$parts[3]"
     bundle="$apps/$name.app"
     rm -rf "$bundle"
 
@@ -168,6 +182,15 @@ cmd_make_apps() {
       || "$plistbuddy" -c "Add :CFBundleIdentifier string com.bfme-macos.$cmd" "$plist" >/dev/null 2>&1
     "$plistbuddy" -c "Add :LSApplicationCategoryType string public.app-category.strategy-games" "$plist" >/dev/null 2>&1
     "$plistbuddy" -c "Add :CFBundleShortVersionString string 1.0" "$plist" >/dev/null 2>&1
+
+    if [ -f "$icons/$icon.icns" ]; then
+      cp "$icons/$icon.icns" "$bundle/Contents/Resources/applet.icns" \
+        || bfme_die "could not put the icon into $bundle"
+      # osacompile sets both CFBundleIconName and CFBundleIconFile to "applet".
+      # The first one resolves through the compiled Assets.car, which still holds
+      # the stock AppleScript icon and wins, so it has to go.
+      "$plistbuddy" -c "Delete :CFBundleIconName" "$plist" >/dev/null 2>&1
+    fi
 
     # Editing Info.plist invalidates the signature osacompile applied.
     codesign --force --sign - --timestamp=none "$bundle" >/dev/null 2>&1 \
