@@ -226,3 +226,33 @@ default scale the game is a 1280x720 window at normal level and the backdrop
 covers it completely, giving a black screen instead of a game. It is only correct
 when the game is at the fullscreen window level, which only happens under the
 fractional scale.
+
+## Two ways the x87 JIT silently stops working
+
+The sidecar's hook lives in **one process image**. Anything that replaces that
+image, or stops a process wrapping itself, drops the JIT — and nothing reports it.
+Everything simply runs at Rosetta's software-x87 speed, about 1/9th. Measure it,
+do not assume it:
+
+```sh
+bfme run tools/archive/benchmarks/cpubench32.exe              # want ~72 Miter/s
+BFME_NO_X87=1 bfme run tools/archive/benchmarks/cpubench32.exe # ~7.7 Miter/s
+```
+
+Both of these were live at once and cost a five minute skirmish load:
+
+1. **Launching through `bin/wine`.** In an installed tree `bin/wine` is a stub
+   that re-execs the real loader at `lib/wine/x86_64-unix/wine`, and that extra
+   exec throws away the hook the sidecar just installed. Invisible in a build
+   tree, where `loader/wine` *is* the real loader. `bfme_wine` uses the real
+   loader directly.
+
+2. **`X87_SIDECAR_ACTIVE` leaking to children.** The re-exec guard stopped an
+   infinite loop but was inherited by every child process, so each one skipped
+   wrapping itself. A launcher would wrap itself correctly and then spawn a game
+   with no JIT at all — which is exactly what the Arena does. `ntdll` now clears
+   the variable once the handshake has completed, so children wrap themselves.
+
+Symptoms to recognise: the sidecar process exists (so it *looks* wired up), boot
+to first frame is roughly normal, and yet map loads take minutes and the frame
+rate sits well below the engine cap.

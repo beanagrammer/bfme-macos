@@ -9,7 +9,7 @@
 set -u
 OUT="${1:?}"; LABEL="${2:-run}"; mkdir -p "$OUT"
 P="${0:A:h:h}"
-R="$P/run-custom-wine.sh"; T="$P/tools/wintool/wintool.exe"; IS="$P/tools/imgstat.py"
+R="$P/bfme run"; T="$P/tools/wintool/wintool.exe"; IS="$P/tools/imgstat.py"
 G="$HOME/.wine-aio-custom/drive_c/BFME1"; LOG="$OUT/${LABEL}.log"; PH="$OUT/${LABEL}_phases.txt"
 W="Battle for Middle-earth"; : > "$PH"
 SW="${SCRW:-1600}"
@@ -23,7 +23,7 @@ snap(){ local id=$(winid); [ -z "$id" ] && return 1
 frac(){ echo "$1" | sed 's/.*frac=\([0-9.]*\).*/\1/'; }
 
 pkill -9 -f lotrbfme.exe 2>/dev/null; sleep 3
-( cd "$G" && WINE_CPU_TOPOLOGY="${TOPO:-off}" WINEDEBUG="+fps" "$R" "$G/lotrbfme.exe" -noshellmap ${=EXTRA:-} > "$LOG" 2>&1 & )
+( cd "$G" && WINEDEBUG="+fps" $P/bfme run "$G/lotrbfme.exe" -noshellmap ${=EXTRA:-} > "$LOG" 2>&1 & )
 LT=$(date +%s)
 for w in $(seq 1 150); do sleep 2; alive || { echo "$LABEL: died at boot"; exit 1; }
   [ "$(fpsn)" -gt 3 ] && break; done
@@ -32,15 +32,15 @@ echo "$LABEL: first frames after $(( $(date +%s) - LT ))s"
 for w in $(seq 1 60); do sleep 3; s=$(snap "$OUT/menu.png") || continue
   f=$(frac "$s"); [ -n "$f" ] && [ "$(echo "$f > 0.10 && $f < 0.40" | bc -l)" = "1" ] && break; done
 echo "$LABEL: main menu ($s)"
-"$R" "$T" hwclick "$W" $(sx 185) $(sx 858) >/dev/null 2>&1; sleep 7
-"$R" "$T" hwclick "$W" $(sx 649) $(sx 860) >/dev/null 2>&1; sleep 14
+$P/bfme run "$T" hwclick "$W" $(sx 185) $(sx 858) >/dev/null 2>&1; sleep 7
+$P/bfme run "$T" hwclick "$W" $(sx 649) $(sx 860) >/dev/null 2>&1; sleep 14
 s=$(snap "$OUT/setup.png"); f=$(frac "$s")
 # The setup screen reads brighter at 2560x1440 with UltraHigh textures (0.40-0.41)
 # than it did at the resolution this was first calibrated on, hence the wider band.
 if [ -z "$f" ] || [ "$(echo "$f > 0.20 && $f < 0.45" | bc -l)" != "1" ]; then
   echo "$LABEL: skirmish setup NOT reached ($s)"; pkill -9 -f lotrbfme.exe; exit 1; fi
 echo "$LABEL: skirmish setup confirmed ($s)"
-F0=$(fpsn); "$R" "$T" hwclick "$W" $(sx 667) $(sx 857) >/dev/null 2>&1; T0=$(perl -MTime::HiRes=time -e "print time()")
+F0=$(fpsn); $P/bfme run "$T" hwclick "$W" $(sx 667) $(sx 857) >/dev/null 2>&1; T0=$(perl -MTime::HiRes=time -e "print time()")
 LOADED=0
 for w in $(seq 1 2400); do
   perl -e "select undef,undef,undef,0.15"; alive || { echo "$LABEL: CRASHED during load"; exit 1; }

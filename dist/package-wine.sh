@@ -41,6 +41,7 @@ DYLD_LIBRARY_PATH="$BUNDLE/deps/lib" WINEDEBUG=-all "$BUNDLE/bin/wine" --version
 mkdir -p "$OUT"
 TARBALL="$OUT/bfme-wine-$VERSION-arm64.tar.zst"
 echo "Compressing (this takes a minute)..."
+rm -f "$TARBALL"        # zstd refuses to overwrite, and a stale tarball is worse than none
 tar -C "$STAGE" -cf - bfme-wine | zstd -19 -T0 -q -o "$TARBALL"
 shasum -a 256 "$TARBALL" | sed "s|$OUT/||" > "$TARBALL.sha256"
 

@@ -67,7 +67,7 @@ index 0000000000..d75777e863
 +
 +#endif  // X87SIDECAR_COOP_PROTO_H
 diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
-index 0d43c5c65e..f96610f2a9 100644
+index 0d43c5c65e..82d7156b6f 100644
 --- a/dlls/ntdll/unix/loader.c
 +++ b/dlls/ntdll/unix/loader.c
 @@ -69,6 +69,9 @@
@@ -118,7 +118,7 @@ index 0d43c5c65e..f96610f2a9 100644
  #ifdef HAVE_WINE_PRELOADER
      asprintf( &argv[0], "%s-preloader", argv[1] );
  #ifdef __APPLE__
-@@ -2101,6 +2135,113 @@ static void check_command_line( int argc, char *argv[] )
+@@ -2101,6 +2135,121 @@ static void check_command_line( int argc, char *argv[] )
  }
  
  
@@ -225,6 +225,14 @@ index 0d43c5c65e..f96610f2a9 100644
 +    }
 +
 +    unsetenv( X87_COOP_ENV );
++
++    /* The re-exec guard has done its job for this process: preloader_exec() has
++     * already run and will not run again here. Leaving it set would be inherited
++     * by every child, and each child needs to wrap *itself* -- the sidecar's hook
++     * lives in one process image, it is not shared. A game launched by a launcher
++     * would otherwise run entirely on Rosetta's software x87: measured 7.7 vs 72.6
++     * Miter/s, and a five minute map load instead of twenty seconds. */
++    unsetenv( "X87_SIDECAR_ACTIVE" );
 +}
 +#endif
 +
@@ -232,7 +240,7 @@ index 0d43c5c65e..f96610f2a9 100644
  /***********************************************************************
   *           __wine_main
   *
-@@ -2111,6 +2252,12 @@ DECLSPEC_EXPORT void __wine_main( int argc, char *argv[] )
+@@ -2111,6 +2260,12 @@ DECLSPEC_EXPORT void __wine_main( int argc, char *argv[] )
      main_argc = argc;
      main_argv = argv;
  

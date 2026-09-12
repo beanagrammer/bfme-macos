@@ -52,8 +52,14 @@ bfme_find_prefix() {
 # and strips DYLD_LIBRARY_PATH, after which WPF apps crash in font code.
 bfme_wine() {
   local w="$BFME_WINE_ROOT"
-  local loader="$w/bin/wine"
+  # Use the real loader, not bin/wine. bin/wine is a stub that re-execs the
+  # loader, and that extra exec throws away x87sidecar's hook -- the JIT then
+  # silently does nothing and everything runs at Rosetta's software-x87 speed
+  # (measured: 7.7 vs 72.6 Miter/s on the same machine, and a skirmish load of
+  # five minutes instead of twenty seconds).
+  local loader="$w/lib/wine/x86_64-unix/wine"      # installed layout
   [ -x "$loader" ] || loader="$w/loader/wine"      # dev build tree
+  [ -x "$loader" ] || loader="$w/bin/wine"         # last resort
   [ -x "$loader" ] || bfme_die "no wine loader under $w"
   local deps="$w/deps/lib"
   [ -d "$deps" ] || deps="$BFME_HOME/deps-x86_64/lib"
