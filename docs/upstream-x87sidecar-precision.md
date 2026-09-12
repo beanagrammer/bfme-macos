@@ -119,6 +119,39 @@ That moved `fsin` from 62.80% differing to 63.00%, i.e. nowhere. The dominant
 error is the polynomial evaluation itself, so a fix needs the Estrin chain
 carried in double-double too, not just the reduction.
 
+## Where the error actually is
+
+I built a bit-exact offline model of the emitted `fsin` (it reproduces a real
+run on 4000/4000 sampled inputs; `tools/x87check/sinmodel.py`) and bisected:
+
+| variant | disagreement with real x87 |
+| --- | --- |
+| as shipped | 63.5% |
+| same coefficients, exact arithmetic | unchanged |
+| coefficients refit over [0, pi/4] | 49% -> 1.8% *for `\|x\| < pi/4` only* |
+| coefficients refit over [0, pi/2], degree 6 | 47.1% |
+| **degree 7, refit over [0, pi/2]** | **14.1%** |
+| degree 8, degree 9 | 15.0%, 14.9% (no better) |
+| degree 7 + exact reduction | 14.1% |
+| degree 7 + exact reduction + double-double `r` | 13.1% |
+
+Two things fall out. The coefficients are fitted over `[0, pi/4]` but the
+reduction uses `1/pi`, so the reduced argument actually spans `[-pi/2, pi/2]`;
+refitting over the range that is really used, plus one more term, is worth
+63.5% -> 14.1% and costs one FMA.
+
+After that it stops, and neither a better polynomial nor a better reduction
+moves it. The floor is the rounding of the correction term `r^3 * P`: near
+`pi/2` that term is 36% of the result, so its own rounding lands directly in the
+last place. Reducing to `[-pi/4, pi/4]` with a quadrant-selected sin/cos pair
+would make it 8%, and a compensated final combination would take care of the
+rest. That is the standard scalar-libm structure, and it looks like what this
+needs.
+
+Worth saying plainly: for a lockstep game a partial improvement is worth
+nothing. 14% desynchronises as reliably as 63%. It is exact or it is unusable,
+which is why I have not sent you a coefficients patch.
+
 ## What would help
 
 Any one of:
