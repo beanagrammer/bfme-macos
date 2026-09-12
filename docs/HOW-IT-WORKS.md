@@ -256,3 +256,53 @@ Both of these were live at once and cost a five minute skirmish load:
 Symptoms to recognise: the sidecar process exists (so it *looks* wired up), boot
 to first frame is roughly normal, and yet map loads take minutes and the frame
 rate sits well below the engine cap.
+
+## The x87 JIT is fast but not bit-exact, and lockstep needs bit-exact
+
+BFME is a lockstep simulation. Only inputs cross the network; every client runs
+the same physics from them and trusts that everyone arrives at the same state. A
+single differing bit in any simulated quantity puts two clients on different
+timelines, and the game notices within seconds and calls it out of sync.
+
+That makes the x87 JIT's arithmetic a *correctness* problem, not just a speed
+win. `tools/x87check/x87exact.exe` measures it by running the x87 instruction set
+over fixed inputs and printing raw bit patterns, with and without the JIT, using
+Rosetta's own emulation as the reference.
+
+At the `0x027F` control word a Windows process starts with -- Wine hands out the
+same value, which `cwstart.exe` confirms -- the JIT is bit-exact for add, sub,
+mul, div, `fsqrt`, `frndint`, `fabs`, `fchs` and `fscale`. It diverges by one
+unit in the last place on every transcendental: `fsin`, `fcos`, `fsincos`,
+`f2xm1`, `fyl2x`, `fpatan`, `fprem`, and the irrational constant loads `fldpi`
+and `fldln2`. It also ignores the precision-control field altogether and always
+computes at 53 bits, which is invisible at `0x027F` and wrong at `0x037F`.
+
+One ulp is enough. A 20,000-iteration rotate-and-normalise loop, which is the
+shape of unit movement, already lands on a different double.
+
+### The fix that is one environment variable away, and why it is not on
+
+The sidecar has the right knob. `X87_STOCK_OPS=fsin,fcos,...` hands every block
+containing those opcodes to stock Rosetta and JITs everything else. It makes
+`x87exact` bit-exact and costs nothing measurable on `x87bench`, because the
+transcendentals are a small share of the work.
+
+It is unusable as it stands. The handoff is only correct while the x87 register
+stack is empty; when the compiler is keeping live doubles in `st(n)` across the
+block, which optimised 32-bit code does constantly, the result comes back as
+garbage rather than merely imprecise. `tools/x87check/stockops-bug.c` is a
+minimal reproducer. The same source built `-O0`, which spills every local to
+memory, gives the correct answer, and none of `X87_ENABLE_BRIDGE=0`,
+`X87_DISABLE_CACHE=1`, `X87_DISABLE_X87_IR=1`, `X87_DISABLE_ALL_FUSIONS=1`,
+`X87_DISABLE_DEFERRED_FXCH=1` or `X87_DISABLE_SINGLE_FAST=1` changes it.
+
+Reading the sidecar source points at why. The JIT defers guest-visible x87 state
+-- the `top_dirty`, `deferred_pop` and `perm_dirty` gate branches all name
+deferrals -- and completes it in the next translated instruction. On a stock hit
+the sidecar replies None and `CacheBypassGuard` *invalidates* the persisted
+`X87Cache` rather than flushing it, so a deferral owed by already-emitted code is
+never completed. Fixing it means not leaving deferred state at a block boundary
+that stock might take over.
+
+Until then the options are the JIT with a desync risk, or `BFME_NO_X87=1`, which
+is bit-exact with Rosetta and about nine times slower.
