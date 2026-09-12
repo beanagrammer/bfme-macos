@@ -330,6 +330,24 @@ switches to it persistently, including for the apps launched from Spotlight.
 Note the shape: the frame rate barely moves, so the simulation during play is not
 especially x87-bound. Almost all of the cost is in loading.
 
+### Why there is no fast correct option
+
+The obvious fix is to make the JIT's transcendentals accurate. It does not work,
+and the reason is worth writing down so nobody tries it again.
+
+x87 itself is not correctly rounded. Measured over 4,000 inputs against stock
+Rosetta: below pi/4 it differs from the correctly-rounded double on 1.8% of
+inputs, and above 200 on 14.1% of them, by as much as 393 ulp. That is its
+66-bit pi reduction showing through, and Rosetta reproduces it faithfully.
+
+So being more accurate moves you *away* from your opponents, not towards them.
+Matching x86 players means reproducing x87's own reduction and polynomial, which
+is undocumented microcode, and for lockstep "nearly" is the same as "no".
+
+That is why `sync-safe` is not a placeholder for a better fix. Short of a
+bit-exact x87 implementation, which is what Rosetta already is, there is no
+faster correct option.
+
 ### Still unproven
 
 That any of this causes the desync actually seen online. BFME executes 26

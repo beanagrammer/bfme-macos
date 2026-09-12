@@ -152,6 +152,37 @@ Worth saying plainly: for a lockstep game a partial improvement is worth
 nothing. 14% desynchronises as reliably as 63%. It is exact or it is unusable,
 which is why I have not sent you a coefficients patch.
 
+## Correction: "correctly rounded" is the wrong target
+
+Everything above measures the JIT against the correctly-rounded double, on the
+reasoning that Intel computes to ~68 bits and rounds to 53. Measured over 4,000
+inputs, that reasoning is wrong: stock Rosetta's x87 differs from the
+correctly-rounded result too.
+
+| range | x87 differs from correctly rounded | worst gap |
+| --- | --- | --- |
+| `\|x\| < pi/4` | 1.8% | 1 ulp |
+| `pi/4 .. pi` | 5.4% | 2 ulp |
+| `pi .. 4pi` | 4.3% | 1 ulp |
+| `4pi .. 200` | 4.0% | 1 ulp |
+| `> 200` | 14.1% | **393 ulp** |
+
+The blow-up at large arguments is the known x87 behaviour: its reduction uses a
+66-bit approximation of pi, so it loses precision where a full Payne-Hanek
+reduction would not. Rosetta reproduces that faithfully, which is exactly what
+an emulator should do.
+
+The consequence for anyone trying to match x87: you cannot get there by being
+more accurate. A correctly-rounded implementation disagrees with x87 on about
+5% of inputs and by hundreds of ulp on large ones. Matching means reproducing
+x87's own reduction constant and its own polynomial, i.e. reimplementing
+undocumented microcode, and "nearly" is worth nothing to a lockstep game.
+
+So this report is no longer a request to make the transcendentals
+correctly rounded. If anything is worth doing upstream it is the narrower
+`X87_STOCK_OPS` fix below, which would let a caller pay for exactness only on
+the opcodes that need it, without giving up the JIT everywhere.
+
 ## What would help
 
 Any one of:
