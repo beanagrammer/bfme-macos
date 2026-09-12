@@ -1,0 +1,103 @@
+# Upstream report, ready to file: x87sidecar transcendentals are not correctly rounded
+
+For [athei/x87sidecar](https://github.com/athei/x87sidecar). Not yet filed; it
+would go under the reporter's own GitHub identity, so it needs a human to post.
+
+---
+
+**Title:** Inline transcendentals are ~1 ulp off, which desynchronises lockstep
+games against players on real x86
+
+**Version:** v1.6.0, and master at 010f50a. macOS 27, M2 Max, Wine 11.17 new-WoW64.
+
+## What happens
+
+The inline transcendentals do not produce the correctly-rounded double, while
+stock Rosetta's emulation does. Sampling `fsin` over ten inputs at control word
+`0x027F`:
+
+| | matches the correctly-rounded double |
+| --- | --- |
+| stock Rosetta (`X87_ALWAYS_NONE=1`) | 10 / 10 |
+| x87sidecar | 3 / 10 |
+
+The same holds for `fcos`, `f2xm1`, `fyl2x`, `fpatan` and `fprem`. The irrational
+constant loads `fldpi` and `fldln2` lose their low mantissa bits. Add, subtract,
+multiply, divide, `fsqrt`, `frndint`, `fabs`, `fchs` and `fscale` are all exact.
+
+## Measured disagreement rate
+
+`x87diff.exe` sweeps 40,000 pseudorandom game-shaped inputs per opcode at control
+word `0x027F` and prints every result, so two runs can be diffed exactly.
+`fsqrt` is the control: it is expected to agree, and does.
+
+| opcode | cases | differ | rate |
+| --- | --- | --- | --- |
+| `fsin` | 40000 | 25175 | 62.9% |
+| `fcos` | 40000 | 27997 | 70.0% |
+| `fsqrt` | 40000 | 0 | **0.0%** |
+| `f2xm1` | 40000 | 26771 | 66.9% |
+| `fpatan` | 40000 | 12317 | 30.8% |
+
+Errors are mostly one or two ulp in both directions; `f2xm1` has a large cluster
+at three or more. This is not a rare edge case: about two in three sine and
+cosine results differ from what an x86 player computes.
+
+## Why it is worth fixing
+
+A Windows process runs x87 at `0x027F`, 53-bit precision, and Wine hands out the
+same value. Intel computes internally to roughly 68 bits and rounds to 53, so at
+that setting Intel's result *is* the correctly-rounded double. That makes this a
+well-defined target rather than an attempt to replicate undocumented hardware:
+correctly rounded is the answer x86 players compute.
+
+It matters for lockstep simulations, where only inputs cross the network and
+every client re-derives the same state. One differing bit desynchronises the
+match. A 20,000-iteration rotate-and-normalise loop, the shape of RTS unit
+movement, already lands on a different double.
+
+The cause looks like the accuracy budget rather than a bug: a degree-7 minimax
+polynomial with three-step Cody-Waite reduction lands about a ulp out, in both
+directions, which is the expected quality for that construction.
+
+## Reproducer
+
+`x87exact.exe` runs the x87 set over fixed inputs at all three precision-control
+settings and prints raw bit patterns. Diff a normal run against
+`X87_ALWAYS_NONE=1`. Source and binary: `tools/x87check/x87exact.c`.
+
+## What a user cannot work around
+
+`X87_STOCK_OPS=fsin,fcos,...` is the natural workaround and is itself broken: it
+short-circuits the translate request and replies None without entering the
+translator, leaving deferred stack state that already-emitted code still owes.
+Results come back as garbage rather than imprecise. Minimal reproducer:
+`tools/x87check/stockops-bug.c`. It is only correct when the x87 register stack
+happens to be empty, i.e. `-O0` builds. No combination of `X87_ENABLE_BRIDGE=0`,
+`X87_DISABLE_CACHE=1`, `X87_DISABLE_X87_IR=1`, `X87_DISABLE_ALL_FUSIONS=1`,
+`X87_DISABLE_DEFERRED_FXCH=1` or `X87_DISABLE_SINGLE_FAST=1` avoids it.
+
+Routing those opcodes through the mechanism that works for
+`fclex`/`fldenv`/`fxsave` -- refusing them in `is_handled_x87` and returning
+`std::nullopt` from the dispatch -- does not work either. The refused
+instructions then never execute: `fsin` leaves its input on the stack and the
+test loop returns NaN. This matches the warning in `X87Cache.cpp` about stock's
+`{x22, w23}` helper-call ABI. `w23` appears nowhere else in the tree, so an
+outside contributor cannot tell what stock expects there.
+
+## What would help
+
+Any one of:
+
+1. A correctly-rounded mode for the transcendentals, opt-in, accepting the speed
+   cost. On our workload the transcendentals are rare -- 26 instruction sites out
+   of 13,728 translated in a game session -- so even a slow path for them would
+   cost little.
+2. Fixing `X87_STOCK_OPS` so the documented per-opcode exclusion works.
+3. Documenting what `w23` must hold, so the `is_handled_x87` route can be
+   completed outside the project.
+
+## Unrelated observation
+
+master at 010f50a is about 1.6x slower than v1.6.0 on an x87-heavy benchmark,
+46 vs 73 Miter/s, same machine and toolchain.

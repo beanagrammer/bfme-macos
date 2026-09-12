@@ -286,8 +286,20 @@ multiply, divide, `fsqrt`, `frndint`, `fabs`, `fchs` and `fscale` are all exact;
 `fsin`, `fcos`, `fsincos`, `f2xm1`, `fyl2x`, `fpatan`, `fprem` and the irrational
 constant loads are not.
 
-One ulp is enough. A 20,000-iteration rotate-and-normalise loop, the shape of
-unit movement, already lands on a different double.
+And it is not rare. `tools/x87check/x87diff.exe` sweeps 40,000 pseudorandom
+game-shaped inputs per opcode and diffs the two runs, with `fsqrt` as a control:
+
+| opcode | cases | differ | rate |
+| --- | --- | --- | --- |
+| `fsin` | 40000 | 25175 | 62.9% |
+| `fcos` | 40000 | 27997 | 70.0% |
+| `fsqrt` | 40000 | 0 | **0.0%** |
+| `f2xm1` | 40000 | 26771 | 66.9% |
+| `fpatan` | 40000 | 12317 | 30.8% |
+
+About two in three sine and cosine results differ from what a player on x86
+computes. One differing bit is enough: a 20,000-iteration rotate-and-normalise
+loop, the shape of unit movement, already lands on a different double.
 
 ### What does not work
 
