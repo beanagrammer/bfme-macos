@@ -260,6 +260,11 @@ bfme_start_backdrop() {
   local helper="$BFME_TOOLS/backdrop"
   [ -x "$helper" ] || return 0          # optional: the game runs fine without it
   [ -n "${BFME_NO_BACKDROP:-}" ] && return 0
+  # Only useful when the game fills the screen and there is a letterbox to fill,
+  # which is the fractional-scale case. At the default scale the game is a normal
+  # window at normal window level and the backdrop would cover it completely --
+  # a black screen instead of a game.
+  [ -z "${BFME_FRACTIONAL_SCALE:-}" ] && return 0
   pkill -f "$helper" 2>/dev/null
   ( "$helper" lotrbfme.exe >/dev/null 2>&1 & )
 }
@@ -286,20 +291,23 @@ bfme_start_backdrop() {
 # This does not affect the coordinates the Arena uses to drive the *game*: those
 # are absolute screen coordinates for the game window, independent of the Arena's
 # own size.
-ARENA_MAX_W=1920
-ARENA_MAX_H=1200
+# The size the Arena opens at, used to centre it.
+ARENA_W=1500
+ARENA_H=1000
 
-bfme_maximize_arena() {
-  local tool="$BFME_TOOLS/wintool.exe" desktop dw dh
-  # Off by default: resizing the Arena's window from outside leaves its WPF
-  # layout half-updated (duplicated bars, stale strips) often enough that the
-  # smaller, correct window is the better default. BFME_ARENA_FULL=1 opts in.
-  [ -z "${BFME_ARENA_FULL:-}" ] && return 0
+# ConstrainWindows=N puts every window exactly where Win32 says, and Win32 opens
+# the Arena at 0,0 -- which is underneath the macOS menu bar, so its title bar and
+# the top of its UI are unreachable until you drag it. The game needs 0,0 (the
+# Arena's coordinates assume it), but the Arena's own window does not, so centre
+# it once it appears.
+bfme_place_arena() {
+  local tool="$BFME_TOOLS/wintool.exe" desktop dw dh x y
+  [ -n "${BFME_NO_PLACE_ARENA:-}" ] && return 0
   [ -f "$tool" ] || return 0            # optional
   desktop=$(bfme_desktop_size) || return 0
   dw=${desktop%x*}; dh=${desktop#*x}
-  [ "$dw" -gt "$ARENA_MAX_W" ] && dw=$ARENA_MAX_W
-  [ "$dh" -gt "$ARENA_MAX_H" ] && dh=$ARENA_MAX_H
+  x=$(( (dw - ARENA_W) / 2 )); [ "$x" -lt 0 ] && x=0
+  y=$(( (dh - ARENA_H) / 2 )); [ "$y" -lt 0 ] && y=0
   (
     # no "local" in here: this is a subshell, not a function body, and zsh treats
     # local outside a function as an error, which kills the job silently.
@@ -317,8 +325,7 @@ bfme_maximize_arena() {
     for delay in 8 22 30 40; do
       sleep $delay
       pgrep -f BfmeFoundationProject_OnlineArena.exe >/dev/null 2>&1 || break
-      bfme_wine "$tool" move "Online Arena" 0 0 >>"${BFME_MAXIMIZE_LOG:-/dev/null}" 2>&1
-      bfme_wine "$tool" resize "Online Arena" "$dw" "$dh" >>"${BFME_MAXIMIZE_LOG:-/dev/null}" 2>&1
+      bfme_wine "$tool" move "Online Arena" "$x" "$y" >>"${BFME_PLACE_LOG:-/dev/null}" 2>&1
     done
   ) &
 }

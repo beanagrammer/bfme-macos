@@ -55,7 +55,7 @@ cmd_arena() {
   bfme_configure_game
   bfme_launch_unlock
   bfme_start_backdrop
-  bfme_maximize_arena
+  bfme_place_arena
   exec_in_prefix "$ARENA_EXE" "the Online Arena"
 }
 

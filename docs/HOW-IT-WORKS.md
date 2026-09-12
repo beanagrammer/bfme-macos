@@ -206,3 +206,23 @@ here instead of 58%) if you would rather have the size than the clean layout.
 
 None of this affects the game: the Arena drives it with absolute screen
 coordinates for the game window, which are independent of the Arena's own size.
+
+## Window placement, and why the backdrop is conditional
+
+`ConstrainWindows=N` puts every window exactly where Win32 says. Win32 opens both
+the game and the Arena at 0,0, which on macOS is underneath the menu bar — so the
+Arena's title bar is unreachable and you cannot drag it. The game has to stay at
+0,0 because the Arena's coordinates assume it; the Arena's own window does not, so
+`bfme_place_arena` centres it once it appears (`BFME_NO_PLACE_ARENA=1` to skip).
+
+The game's top ~33 points are still under the menu bar. Raising it would need the
+fullscreen window level, and `updateFullscreen` is never called for that window —
+instrumenting it produced no output at all — so the level cannot be set from
+there. Not solved.
+
+`tools/backdrop` is **only** started when `BFME_FRACTIONAL_SCALE=1`. It paints the
+screen black at status window level, which is above a normal window: at the
+default scale the game is a 1280x720 window at normal level and the backdrop
+covers it completely, giving a black screen instead of a game. It is only correct
+when the game is at the fullscreen window level, which only happens under the
+fractional scale.
