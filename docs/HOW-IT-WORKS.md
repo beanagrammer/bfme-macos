@@ -261,48 +261,70 @@ rate sits well below the engine cap.
 
 BFME is a lockstep simulation. Only inputs cross the network; every client runs
 the same physics from them and trusts that everyone arrives at the same state. A
-single differing bit in any simulated quantity puts two clients on different
-timelines, and the game notices within seconds and calls it out of sync.
+single differing bit puts two clients on different timelines, and the game
+notices within seconds and calls it out of sync.
 
-That makes the x87 JIT's arithmetic a *correctness* problem, not just a speed
-win. `tools/x87check/x87exact.exe` measures it by running the x87 instruction set
-over fixed inputs and printing raw bit patterns, with and without the JIT, using
-Rosetta's own emulation as the reference.
+`tools/x87check/x87exact.exe` measures whether the JIT computes the same bits as
+the x87 Rosetta emulates. It does not, and the shape of the difference is the
+important part:
 
-At the `0x027F` control word a Windows process starts with -- Wine hands out the
-same value, which `cwstart.exe` confirms -- the JIT is bit-exact for add, sub,
-mul, div, `fsqrt`, `frndint`, `fabs`, `fchs` and `fscale`. It diverges by one
-unit in the last place on every transcendental: `fsin`, `fcos`, `fsincos`,
-`f2xm1`, `fyl2x`, `fpatan`, `fprem`, and the irrational constant loads `fldpi`
-and `fldln2`. It also ignores the precision-control field altogether and always
-computes at 53 bits, which is invisible at `0x027F` and wrong at `0x037F`.
+| | matches the correctly-rounded double |
+| --- | --- |
+| Rosetta's emulation | 10 of 10 sampled sine inputs |
+| the x87 JIT | 3 of 10, always one ulp high |
 
-One ulp is enough. A 20,000-iteration rotate-and-normalise loop, which is the
-shape of unit movement, already lands on a different double.
+That comparison is what makes this actionable. A Windows process runs x87 at the
+`0x027F` control word, 53-bit precision, and Wine hands out the same value
+(`tools/x87check/cwstart.exe` proves it). Intel computes internally to about 68
+bits and then rounds to 53, so at that setting Intel's answer *is* the
+correctly-rounded double in essentially every case. Rosetta reproduces it.
 
-### The fix that is one environment variable away, and why it is not on
+So the JIT is not "differently rounded from Intel" in some unknowable way. It is
+simply not correctly rounded, because it uses a degree-7 minimax polynomial with
+three-step Cody-Waite reduction -- fast, and about a ulp off. Add, subtract,
+multiply, divide, `fsqrt`, `frndint`, `fabs`, `fchs` and `fscale` are all exact;
+`fsin`, `fcos`, `fsincos`, `f2xm1`, `fyl2x`, `fpatan`, `fprem` and the irrational
+constant loads are not.
 
-The sidecar has the right knob. `X87_STOCK_OPS=fsin,fcos,...` hands every block
-containing those opcodes to stock Rosetta and JITs everything else. It makes
-`x87exact` bit-exact and costs nothing measurable on `x87bench`, because the
-transcendentals are a small share of the work.
+One ulp is enough. A 20,000-iteration rotate-and-normalise loop, the shape of
+unit movement, already lands on a different double.
 
-It is unusable as it stands. The handoff is only correct while the x87 register
-stack is empty; when the compiler is keeping live doubles in `st(n)` across the
-block, which optimised 32-bit code does constantly, the result comes back as
-garbage rather than merely imprecise. `tools/x87check/stockops-bug.c` is a
-minimal reproducer. The same source built `-O0`, which spills every local to
-memory, gives the correct answer, and none of `X87_ENABLE_BRIDGE=0`,
-`X87_DISABLE_CACHE=1`, `X87_DISABLE_X87_IR=1`, `X87_DISABLE_ALL_FUSIONS=1`,
-`X87_DISABLE_DEFERRED_FXCH=1` or `X87_DISABLE_SINGLE_FAST=1` changes it.
+### What does not work
 
-Reading the sidecar source points at why. The JIT defers guest-visible x87 state
--- the `top_dirty`, `deferred_pop` and `perm_dirty` gate branches all name
-deferrals -- and completes it in the next translated instruction. On a stock hit
-the sidecar replies None and `CacheBypassGuard` *invalidates* the persisted
-`X87Cache` rather than flushing it, so a deferral owed by already-emitted code is
-never completed. Fixing it means not leaving deferred state at a block boundary
-that stock might take over.
+`X87_STOCK_OPS=fsin,...` looks like the fix. It short-circuits the translate
+request, leaving deferred stack state that already-emitted code still owes, and
+returns garbage -- `tools/x87check/stockops-bug.c` reproduces it.
 
-Until then the options are the JIT with a desync risk, or `BFME_NO_X87=1`, which
-is bit-exact with Rosetta and about nine times slower.
+Refusing those opcodes in `is_handled_x87` and returning `std::nullopt` from the
+dispatch, which is how `fclex`/`fldenv`/`fxsave` correctly reach stock, does not
+work either: the refused instructions then never execute at all. `fsin` leaves
+its input on the stack and the simulation loop returns NaN. `X87Cache.cpp` warns
+that transcendentals clash with stock's `{x22, w23}` helper-call ABI, and it is
+right. `w23` appears nowhere in the sidecar's code, only in that warning, so
+making the handoff work means reverse-engineering what Rosetta's own helper
+expects there. The attempt is kept at `patches/x87sidecar-0001-exact-mode.patch`,
+marked as broken.
+
+### What does work, and what it costs
+
+Turning the JIT off. Rosetta's emulation is bit-exact, and `bfme sync-safe on`
+switches to it persistently, including for the apps launched from Spotlight.
+
+| | skirmish load | in-game |
+| --- | --- | --- |
+| JIT (default) | 19.1 s | 38.5 fps |
+| `sync-safe on` | 311.5 s | 33.8 fps |
+
+Note the shape: the frame rate barely moves, so the simulation during play is not
+especially x87-bound. Almost all of the cost is in loading.
+
+### Still unproven
+
+That any of this causes the desync actually seen online. BFME executes 26
+divergent instruction sites out of 13,728 translated, so the code paths are
+reached, but whether any sits in the simulation rather than rendering is unknown.
+Three ways to settle it were tried and all are blocked: a second instance for a
+LAN test is refused with "your serial is already in use", `-deepCRC` parses but
+writes nothing in a release build, and replays are not saved even on a clean exit
+from the pause menu. The remaining way to know is to play a real online match
+with `sync-safe on` and see whether the desync stops.

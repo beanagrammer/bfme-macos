@@ -19,6 +19,16 @@
 set -u
 
 BFME_APP_SUPPORT="$HOME/Library/Application Support/bfme-macos"
+
+# Sync-safe mode. The x87 JIT's transcendentals are not correctly rounded -- it
+# matches the correctly-rounded double on 3 of 10 sampled sine inputs where
+# Rosetta matches 10 of 10 -- so its results differ from every player running on
+# real x86. BFME is a lockstep simulation, so that is a desync risk. Turning the
+# JIT off runs x87 on Rosetta, which is bit-exact, at roughly nine times the cost.
+#
+# A marker file rather than an environment variable, because the apps launched
+# from Spotlight cannot carry one. `bfme sync-safe on` writes it.
+[ -f "$BFME_APP_SUPPORT/sync-safe" ] && export BFME_NO_X87=1
 GAME_W=2560
 GAME_H=1440
 

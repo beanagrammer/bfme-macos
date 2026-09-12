@@ -8,6 +8,7 @@
 #   bfme run <exe>   run any Windows program in the prefix
 #   bfme bootstrap   create/refresh the prefix and its settings
 #   bfme make-apps   (re)create the apps in ~/Applications
+#   bfme sync-safe on|off|status   trade x87 speed for results that match x86 players
 #
 # Your macOS display resolution is never changed.
 set -u
@@ -233,6 +234,29 @@ cmd_make_apps() {
   mdimport "$apps" >/dev/null 2>&1 || true
 }
 
+cmd_sync_safe() {
+  local marker="$BFME_APP_SUPPORT/sync-safe"
+  case "$1" in
+    on)
+      mkdir -p "$BFME_APP_SUPPORT" || bfme_die "could not create $BFME_APP_SUPPORT"
+      : > "$marker" || bfme_die "could not write $marker"
+      print -r -- "sync-safe ON: x87 runs on Rosetta, which is bit-exact with x86."
+      print -r -- "  Loads and x87-heavy work get roughly 9x slower. Frame rate is unaffected."
+      print -r -- "  This applies to the apps launched from Spotlight too."
+      ;;
+    off)
+      rm -f "$marker"
+      print -r -- "sync-safe OFF: the x87 JIT is on. Fast, but its transcendentals are"
+      print -r -- "  one unit in the last place off from real x87, which can desync online games."
+      ;;
+    status)
+      if [ -f "$marker" ]; then print -r -- "sync-safe is ON  (bit-exact, slower)"
+      else print -r -- "sync-safe is OFF (fast, may desync online)"; fi
+      ;;
+    *) print -r -- "usage: bfme sync-safe on|off|status" >&2; return 2 ;;
+  esac
+}
+
 case "${1:-}" in
   launcher)   cmd_launcher ;;
   arena)      cmd_arena ;;
@@ -240,6 +264,7 @@ case "${1:-}" in
   doctor)     cmd_doctor ;;
   bootstrap)  cmd_bootstrap ;;
   make-apps)  cmd_make_apps ;;
+  sync-safe)  shift; cmd_sync_safe "${1:-status}" ;;
   prefix-path) print -r -- "$BFME_PREFIX_DIR" ;;
   wine-path)  print -r -- "$BFME_WINE_ROOT" ;;
   run)        shift; cmd_run "$@" ;;
