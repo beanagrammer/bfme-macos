@@ -138,6 +138,31 @@ Every one of these produced a wrong number at some point:
 - Leaked `wintool pin` / `winwatch` polling loops accumulate across runs and slow
   the whole machine down. They take a duration argument; use it.
 
+## Known limitation: GDI windows under a fractional RetinaScale
+
+`RetinaScale` works for the game, which renders through D3D/Metal. It does **not**
+fully work for a plain GDI window such as the Arena: the window's *geometry* uses
+the configured scale, but its surface is still drawn at the display's own backing
+scale factor (2 on a Retina Mac). The window is therefore sized for 1.481 px per
+point while its contents are painted at 2, so the content covers `1.481/2 = 74%`
+of the window and the remaining right and bottom edges are never painted.
+
+Measured on a 1500x1000 window: 1008x685 points on screen, 749x497 points painted.
+
+Converting every hardcoded factor in `cocoa_window.m` is necessary but not
+sufficient — nine sites (`contentsScale` on the host, content-view, mask and
+offscreen layers; `rasterizationScale`; the two `setRetinaMode:` geometry
+rescales; the mouse-delta scale; the cursor clip rect) were converted and the
+border remains. Pinning `layer.contentsScale` in `updateLayer` at the point the
+crop is computed does not help either, so the assumption lives somewhere further
+down in how the surface itself is sized. Not yet isolated.
+
+**Consequence:** the game is genuinely fullscreen; the Arena's launcher window has
+an unpainted border. If that matters more to you than a fullscreen game, set
+`RetinaScale` to `2` — everything is then consistent and the Arena paints
+correctly, at the cost of the game being 1280x720 points instead of filling the
+screen.
+
 ## The Arena's own window
 
 The Arena's launcher/lobby window is separate from the game and has its own

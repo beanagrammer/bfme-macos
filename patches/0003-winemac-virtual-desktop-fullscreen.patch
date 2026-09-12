@@ -25,7 +25,7 @@ index b6151a2c8c..285cb63784 100644
      cursorClipRect->origin.y *= scale;
      cursorClipRect->size.width *= scale;
 diff --git a/dlls/winemac.drv/cocoa_window.m b/dlls/winemac.drv/cocoa_window.m
-index 9672c3c952..f4d40b9247 100644
+index 9672c3c952..31aa0c482f 100644
 --- a/dlls/winemac.drv/cocoa_window.m
 +++ b/dlls/winemac.drv/cocoa_window.m
 @@ -107,6 +107,30 @@ static BOOL frame_intersects_screens(NSRect frame, NSArray* screens)
@@ -86,6 +86,15 @@ index 9672c3c952..f4d40b9247 100644
              }
              else
                  [self layer].shouldRasterize = NO;
+@@ -632,7 +656,7 @@ - (void) setLayerRetinaProperties:(BOOL)mode
+ 
+     - (void) setRetinaMode:(BOOL)mode
+     {
+-        double scale = mode ? 0.5 : 2.0;
++        double scale = mode ? 1.0 / retina_scale : retina_scale;
+         NSRect frame = self.frame;
+         frame.origin.x *= scale;
+         frame.origin.y *= scale;
 @@ -647,7 +671,7 @@ - (void) setRetinaMode:(BOOL)mode
          [self setLayerRetinaProperties:mode];
  
@@ -134,7 +143,13 @@ index 9672c3c952..f4d40b9247 100644
              frame_intersects_screens(frameRect, screens))
              frameRect = [super constrainFrameRect:frameRect toScreen:screen];
          return frameRect;
-@@ -2516,7 +2543,7 @@ - (void) setRetinaMode:(BOOL)mode
+@@ -2511,12 +2538,12 @@ - (void) updateForGLSubviews
+     - (void) setRetinaMode:(BOOL)mode
+     {
+         NSRect frame;
+-        double scale = mode ? 0.5 : 2.0;
++        double scale = mode ? 1.0 / retina_scale : retina_scale;
+         NSAffineTransform* transform = [NSAffineTransform transform];
  
          [transform scaleBy:scale];
  
