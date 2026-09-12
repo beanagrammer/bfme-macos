@@ -80,6 +80,7 @@ for f in bfme bfme-config.sh; do
   cp "$REPO/$f" "$APP_DIR/"
 done
 cp "$REPO/tools/listmodes" "$APP_DIR/tools/" || die "missing tools/listmodes"
+cp "$REPO/tools/backdrop" "$APP_DIR/tools/" || die "missing tools/backdrop"
 chmod +x "$APP_DIR/bfme"
 print -r -- "  $APP_DIR"
 

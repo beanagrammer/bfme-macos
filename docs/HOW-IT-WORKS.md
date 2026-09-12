@@ -83,15 +83,32 @@ hover 700,1423 -> 230 179 106    (highlight — exactly +66)
 
 ## Display geometry
 
-The virtual desktop is fixed at 2560x1440. `bfme-config.sh` picks
+The game must render 2560x1440 for the Arena, so `bfme-config.sh` picks
 
 ```
 scale = max(2560 / screen_width_points, 1440 / screen_height_points, 1)
 ```
 
-so the window is as large as it can be while still fitting. On a 1728x1117
-screen that is 1.481481 → 1728x972 points: full width, a 145-point letterbox at
-the bottom from 16:9 in a 16:10.4 screen. On a 16:9 display it fills exactly.
+which makes the game as large as it can be while still fitting. On a 1728x1117
+screen that is 1.481481 → 1728x972 points: full width, with 145 points left over
+at the bottom because a 16:9 game cannot fill a 1.547 screen. On a 16:9 display
+it fills exactly and there is nothing left over.
+
+Two things deal with the leftover strip:
+
+- The **virtual desktop** is sized to the whole screen (2560x1655 here), not to
+  the game. The game still sits at 0,0 at exactly 2560x1440, which is what the
+  Arena requires. Changing the desktop size only takes effect after wineserver
+  restarts, so `bfme_configure_wine` notices the change and restarts it.
+- `tools/backdrop` paints the strip black. Wine draws a Cocoa window per top-level
+  window rather than one window for the whole desktop, so the desktop being
+  larger does not by itself produce a black border — without the backdrop the
+  strip is a hole showing whatever is behind. The helper sits at
+  `NSWindow.Level.statusBar` (25): above the menu bar (24) and every ordinary
+  window, below the level Wine gives a fullscreen window (27). It paints only
+  while the game runs *and* Wine is frontmost, so Cmd-Tab does not leave a black
+  sheet over the machine, and it exits by itself 20 s after the game is gone.
+  `BFME_NO_BACKDROP=1` turns it off.
 
 ## Performance
 

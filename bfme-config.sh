@@ -89,28 +89,60 @@ bfme_wineserver_wait() {
   WINEPREFIX="$BFME_PREFIX_DIR" DYLD_LIBRARY_PATH="$deps" "$ws" -w
 }
 
-# Scale the 2560x1440 desktop down to the largest size that still fits the screen.
+# Scale the 2560x1440 game down to the largest size that still fits the screen.
 # Both axes are considered so the window never overflows; the larger ratio wins.
-bfme_display_scale() {
+bfme_screen_points() {
   local dims w h
   dims=$("$BFME_TOOLS/listmodes" 2>/dev/null | head -1) \
     || bfme_die "could not read the display size (tools/listmodes missing?)"
   w=$(printf '%s\n' "$dims" | sed -n 's/^current: \([0-9]*\) x \([0-9]*\).*/\1/p')
   h=$(printf '%s\n' "$dims" | sed -n 's/^current: \([0-9]*\) x \([0-9]*\).*/\2/p')
   [ -n "$w" ] && [ -n "$h" ] || bfme_die "could not parse the display size from: $dims"
-  awk -v w="$w" -v h="$h" -v gw=$GAME_W -v gh=$GAME_H \
+  print -r -- "$w $h"
+}
+
+bfme_display_scale() {
+  local wh
+  wh=$(bfme_screen_points) || return 1
+  awk -v w="${wh%% *}" -v h="${wh##* }" -v gw=$GAME_W -v gh=$GAME_H \
     'BEGIN { s = gw / w; t = gh / h; if (t > s) s = t; if (s < 1) s = 1; printf "%.6f", s }'
+}
+
+# The virtual desktop is sized to the whole screen, not to the game. The game is
+# 16:9 and most Macs are not, so something has to fill the leftover strip -- and
+# it should be Wine's own black desktop rather than a hole showing whatever is
+# behind. The game still sits at 0,0 at exactly GAME_W x GAME_H, which is what
+# the Arena's hardcoded coordinates require.
+bfme_desktop_size() {
+  local wh scale
+  wh=$(bfme_screen_points) || return 1
+  scale=$(bfme_display_scale) || return 1
+  awk -v w="${wh%% *}" -v h="${wh##* }" -v s="$scale" -v gw=$GAME_W -v gh=$GAME_H \
+    'BEGIN {
+       dw = int(w * s + 0.5); dh = int(h * s + 0.5);
+       if (dw < gw) dw = gw;
+       if (dh < gh) dh = gh;
+       printf "%dx%d", dw, dh
+     }'
 }
 
 # Wine-side settings. Safe to run against a brand new prefix.
 bfme_configure_wine() {
-  local scale reg shown applied
+  local scale reg shown applied desktop
   scale=$(bfme_display_scale)
+  desktop=$(bfme_desktop_size)
   shown=$(awk -v s=$scale -v gw=$GAME_W -v gh=$GAME_H 'BEGIN{printf "%dx%d", gw/s, gh/s}')
-  print -r -- "  display scale $scale: a ${GAME_W}x${GAME_H} game shown at $shown points"
+  print -r -- "  display scale $scale: a ${GAME_W}x${GAME_H} game shown at $shown points,"
+  print -r -- "  inside a ${desktop} desktop that fills the screen"
 
   # One import instead of five "reg add" calls -- each of those is a separate
   # Wine start, which is most of the wait before the window appears.
+  # The virtual desktop's size is fixed when wineserver creates it, so a change
+  # here only takes effect after the server restarts. Notice that before writing.
+  local previous
+  previous=$(bfme_wine reg query 'HKCU\Software\Wine\Explorer\Desktops' /v Default 2>/dev/null \
+             | sed -n 's/.*REG_SZ[[:space:]]*//p' | tr -d '[:space:]')
+
   # Built with printf, not a heredoc: getting single backslashes through heredoc
   # quoting is easy to get wrong, and a .reg file with doubled backslashes is
   # rejected by regedit with "Unable to open the registry key".
@@ -124,7 +156,7 @@ bfme_configure_wine() {
     printf '[HKEY_CURRENT_USER\\Software\\Wine\\Explorer]\n'
     printf '"Desktop"="Default"\n\n'
     printf '[HKEY_CURRENT_USER\\Software\\Wine\\Explorer\\Desktops]\n'
-    printf '"Default"="%sx%s"\n\n' "$GAME_W" "$GAME_H"
+    printf '"Default"="%s"\n\n' "$desktop"
     printf '[HKEY_CURRENT_USER\\Software\\Wine\\Direct3D]\n'
     printf '"renderer"="gl"\n'
   } > "$reg"
@@ -143,10 +175,17 @@ bfme_configure_wine() {
     || bfme_die "could not read back the Wine settings"
   local expect
   for expect in "RetinaMode.*y" "RetinaScale.*$scale" "ConstrainWindows.*N" \
-                "Desktop.*Default" "Default.*${GAME_W}x${GAME_H}"; do
+                "Desktop.*Default" "Default.*$desktop"; do
     printf '%s\n' "$applied" | grep -qE "$expect" \
       || bfme_die "Wine setting did not apply: $expect"
   done
+
+  # A desktop whose size changed is still the old size in the running server.
+  if [ -n "$previous" ] && [ "$previous" != "$desktop" ]; then
+    print -r -- "  desktop size changed ($previous -> $desktop); restarting wineserver"
+    pkill -9 -f "$BFME_WINE_ROOT.*wineserver" 2>/dev/null
+    sleep 3
+  fi
 }
 
 # Game-side settings. Needs the game to have been run once so Options.ini exists.
@@ -180,6 +219,18 @@ bfme_ensure_wineserver() {
     && bfme_die "could not reach a wineserver even after restarting it:
     $probe"
   return 0
+}
+
+# BFME renders 16:9 because the Arena's coordinates require it, and most Macs are
+# not 16:9, so a strip is always left over. Fill it with black rather than leaving
+# a hole that shows the desktop. The helper only paints while the game is running
+# and Wine is frontmost, and exits on its own once the game is gone.
+bfme_start_backdrop() {
+  local helper="$BFME_TOOLS/backdrop"
+  [ -x "$helper" ] || return 0          # optional: the game runs fine without it
+  [ -n "${BFME_NO_BACKDROP:-}" ] && return 0
+  pkill -f "$helper" 2>/dev/null
+  ( "$helper" lotrbfme.exe >/dev/null 2>&1 & )
 }
 
 # Bring an already-running Wine program to the front.

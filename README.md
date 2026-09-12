@@ -12,7 +12,7 @@ Measured on an M2 Max, macOS 27, 1728x1117 display:
 | Skirmish load | 19.3 s |
 | In-game frame rate | 38.3 fps (the engine's cap) |
 | Arena connection test | 11/11 passes, including from the packaged build |
-| Display | full width, nothing clipped, macOS resolution never changed |
+| Display | fullscreen with a black letterbox, macOS resolution never changed |
 
 ## Install
 
@@ -116,7 +116,7 @@ bfme-config.sh       locating Wine and the prefix, plus the display configuratio
 dist/                packaging the redistributable Wine bundle, and how to release it
 patches/             the three Wine patches, with what each fixes and why
 docs/                findings, including the Arena's game-side protocol
-tools/               diagnostics that are still useful; tools/archive/ is history
+tools/               backdrop (fills the letterbox) and diagnostics; tools/archive/ is history
 config/              GameLOD override for lower-end machines
 ```
 

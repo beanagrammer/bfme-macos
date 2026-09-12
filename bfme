@@ -54,6 +54,7 @@ cmd_arena() {
   bfme_configure_wine
   bfme_configure_game
   bfme_launch_unlock
+  bfme_start_backdrop
   exec_in_prefix "$ARENA_EXE" "the Online Arena"
 }
 
@@ -66,6 +67,7 @@ cmd_play() {
   bfme_configure_wine
   bfme_configure_game
   bfme_launch_unlock
+  bfme_start_backdrop
   print -r -- "Launching BFME 1..."
   cd "${game:h}" || bfme_die "could not enter ${game:h}"
   bfme_wine "$game" -noshellmap
