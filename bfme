@@ -9,6 +9,7 @@
 #   bfme bootstrap   create/refresh the prefix and its settings
 #   bfme make-apps   (re)create the apps in ~/Applications
 #   bfme sync-safe on|off|status   trade x87 speed for results that match x86 players
+#   bfme collect-desync            gather the evidence after an online game went out of sync
 #
 # Your macOS display resolution is never changed.
 set -u
@@ -103,6 +104,12 @@ cmd_doctor() {
   [ -f "$BFME_PREFIX_DIR/system.reg" ] || { print -r -- "                 not created yet -- run 'bfme bootstrap'"; ok=0; }
   # The x87 JIT fails silently -- the sidecar runs, its probe passes, and it
   # accelerates nothing. Measuring is the only way to know.
+  # With the JIT off there is nothing to measure against: x87 runs on Rosetta,
+  # which is the reference. Say so, rather than printing nothing and letting
+  # silence read as "checks passed".
+  if [ -n "${BFME_NO_X87:-}" ]; then
+    print -r -- "  x87            JIT OFF (sync-safe) -- bit-exact with x86, loads ~16x slower"
+  fi
   local bench="$BFME_TOOLS/x87check/x87bench.exe" jit nojit ratio
   if [ -f "$bench" ] && [ -z "${BFME_NO_X87:-}" ]; then
     jit=$(bfme_wine "$bench" 20000000 2>/dev/null | sed -n 's/.*(\([0-9.]*\) Miter.*/\1/p')
@@ -234,6 +241,49 @@ cmd_make_apps() {
   mdimport "$apps" >/dev/null 2>&1 || true
 }
 
+# After an online game goes out of sync there is a short window in which the
+# evidence still exists: the game writes a desync report naming the subsystem
+# that mismatched, and the Arena's log is truncated on its next launch. This
+# grabs all of it before that happens. Run it straight after the match.
+cmd_collect_desync() {
+  local out="${1:-$HOME/Desktop/bfme-desync-$(date +%Y%m%d-%H%M%S)}"
+  mkdir -p "$out" || bfme_die "could not create $out"
+  local c="$BFME_PREFIX_DIR/drive_c"
+  local roam="$c/users/$USER/AppData/Roaming"
+  local found=0 f
+
+  # The reports themselves: CLIENT_DESYNC_*.txt and DESYNC-*-*.txt. Anywhere in
+  # the prefix, because the game's idea of "current directory" varies.
+  for f in $(find "$c" -iname '*desync*' -type f 2>/dev/null); do
+    cp "$f" "$out/" 2>/dev/null && found=$((found+1))
+  done
+
+  # The Arena's own log, which is rewritten from scratch on its next launch.
+  [ -f "$c/BFME1/arenaapilog.txt" ] && cp "$c/BFME1/arenaapilog.txt" "$out/"
+  # What the game was configured to do, and the replay if one was written.
+  [ -f "$roam/My Battle for Middle-earth Files/Options.ini" ] && \
+    cp "$roam/My Battle for Middle-earth Files/Options.ini" "$out/"
+  for f in $(find "$roam/My Battle for Middle-earth Files/Replays" -name '*.rep' 2>/dev/null); do
+    cp "$f" "$out/" 2>/dev/null
+  done
+
+  # Which x87 mode was in force, since that is the variable under test.
+  { print -r -- "collected $(date)"
+    print -r -- "sync-safe: $([ -f "$BFME_APP_SUPPORT/sync-safe" ] && echo ON || echo OFF)"
+    print -r -- "prefix:    $BFME_PREFIX_DIR"
+    print -r -- "wine:      $BFME_WINE_ROOT"
+    print -r -- "desync reports found: $found"
+  } > "$out/context.txt"
+
+  print -r -- "  collected into $out"
+  if [ "$found" -gt 0 ]; then
+    print -r -- "  $found desync report(s) -- these name the subsystem that mismatched"
+  else
+    print -r -- "  no desync report was written; the game only writes one for some"
+    print -r -- "  mismatch kinds, so its absence does not mean the game stayed in sync"
+  fi
+}
+
 cmd_sync_safe() {
   local marker="$BFME_APP_SUPPORT/sync-safe"
   case "$1" in
@@ -265,6 +315,7 @@ case "${1:-}" in
   bootstrap)  cmd_bootstrap ;;
   make-apps)  cmd_make_apps ;;
   sync-safe)  shift; cmd_sync_safe "${1:-status}" ;;
+  collect-desync) shift; cmd_collect_desync "${1:-}" ;;
   prefix-path) print -r -- "$BFME_PREFIX_DIR" ;;
   wine-path)  print -r -- "$BFME_WINE_ROOT" ;;
   run)        shift; cmd_run "$@" ;;
