@@ -85,6 +85,40 @@ test loop returns NaN. This matches the warning in `X87Cache.cpp` about stock's
 `{x22, w23}` helper-call ABI. `w23` appears nowhere else in the tree, so an
 outside contributor cannot tell what stock expects there.
 
+## Two things I tried, so you do not have to
+
+**A host call is not available.** I added an AAPCS call from the emitted code to
+a libm helper: a 704-byte SP frame saving x0-x18, x30 and all 32 vector
+registers in full, then `BLR`. It fails with
+
+```
+rosetta error: no code fragment associated with the given arm pc
+```
+
+Bisected: emitting the entire frame, the saves, the argument spills and the
+restores works perfectly, and the program runs to completion. Adding only the
+`BLR` produces the error. So SP *is* a valid, usable stack inside a translated
+block, and the register traffic is fine; Rosetta simply refuses control flow
+leaving the fragment to an address it does not know. That rules out routing
+these opcodes through the host's libm from outside the project, and explains why
+there is no host-call infrastructure in the tree.
+
+**The range reduction is not where the error comes from.** My first guess was
+that the reduced argument being rounded to a single double was the culprit,
+since d(sin)/dr is about 1 and that rounding is the same size as the observed
+error. I extended `emit_trig_range_reduce` to keep the residual as a
+double-double, using an exact product error via FMSUB plus a two-sum on the
+final `n*pi3` step, and folded the low half into the correction term before the
+last rounding:
+
+```
+corr = fma(r3, p06, r_lo);   y = r_hi + corr
+```
+
+That moved `fsin` from 62.80% differing to 63.00%, i.e. nowhere. The dominant
+error is the polynomial evaluation itself, so a fix needs the Estrin chain
+carried in double-double too, not just the reduction.
+
 ## What would help
 
 Any one of:
