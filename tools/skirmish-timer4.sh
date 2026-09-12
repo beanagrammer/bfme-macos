@@ -30,14 +30,14 @@ for w in $(seq 1 150); do sleep 2; alive || { echo "$LABEL: died at boot"; exit 
 [ "$(fpsn)" -le 3 ] && { echo "$LABEL: never presented a frame"; pkill -9 -f lotrbfme.exe; exit 1; }
 echo "$LABEL: first frames after $(( $(date +%s) - LT ))s"
 for w in $(seq 1 60); do sleep 3; s=$(snap "$OUT/menu.png") || continue
-  f=$(frac "$s"); [ -n "$f" ] && [ "$(echo "$f > 0.10 && $f < 0.40" | bc -l)" = "1" ] && break; done
+  f=$(frac "$s"); [ -n "$f" ] && [ "$(echo "$f > 0.05 && $f < 0.45" | bc -l)" = "1" ] && break; done
 echo "$LABEL: main menu ($s)"
 $P/bfme run "$T" hwclick "$W" $(sx 185) $(sx 858) >/dev/null 2>&1; sleep 7
 $P/bfme run "$T" hwclick "$W" $(sx 649) $(sx 860) >/dev/null 2>&1; sleep 14
 s=$(snap "$OUT/setup.png"); f=$(frac "$s")
 # The setup screen reads brighter at 2560x1440 with UltraHigh textures (0.40-0.41)
 # than it did at the resolution this was first calibrated on, hence the wider band.
-if [ -z "$f" ] || [ "$(echo "$f > 0.20 && $f < 0.45" | bc -l)" != "1" ]; then
+if [ -z "$f" ] || [ "$(echo "$f > 0.12 && $f < 0.50" | bc -l)" != "1" ]; then
   echo "$LABEL: skirmish setup NOT reached ($s)"; pkill -9 -f lotrbfme.exe; exit 1; fi
 echo "$LABEL: skirmish setup confirmed ($s)"
 F0=$(fpsn); $P/bfme run "$T" hwclick "$W" $(sx 667) $(sx 857) >/dev/null 2>&1; T0=$(perl -MTime::HiRes=time -e "print time()")

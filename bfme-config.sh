@@ -63,7 +63,11 @@ bfme_wine() {
   [ -x "$loader" ] || bfme_die "no wine loader under $w"
   local deps="$w/deps/lib"
   [ -d "$deps" ] || deps="$BFME_HOME/deps-x86_64/lib"
-  local sidecar="$w/x87sidecar/x87sidecar"
+  # BFME_SIDECAR lets a locally built sidecar be tested without replacing the
+  # shipped one.
+  local sidecar="${BFME_SIDECAR:-}"
+  [ -n "$sidecar" ] && [ ! -x "$sidecar" ] && bfme_die "BFME_SIDECAR is set to $sidecar, which is not executable"
+  [ -n "$sidecar" ] || sidecar="$w/x87sidecar/x87sidecar"
   [ -x "$sidecar" ] || sidecar="$BFME_HOME/tools/x87sidecar/x87sidecar"
 
   (

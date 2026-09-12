@@ -1,0 +1,139 @@
+diff --git a/rosetta_core/include/rosetta_core/Config.h b/rosetta_core/include/rosetta_core/Config.h
+index f050610..2b32629 100644
+--- a/rosetta_core/include/rosetta_core/Config.h
++++ b/rosetta_core/include/rosetta_core/Config.h
+@@ -43,6 +43,9 @@ struct RosettaConfig {
+     uint8_t fast_round;             // X87_FAST_ROUND            skip RC dispatch (round-to-nearest)
+     uint8_t disable_deferred_fxch;  // X87_DISABLE_DEFERRED_FXCH disable OPT-G
+     uint8_t disable_x87_ir;         // X87_DISABLE_X87_IR        disable IR optimisation pipeline
++    uint8_t x87_exact;               // X87_EXACT hand every operation that is not
++                                     // bit-identical to real x87 back to stock, so a
++                                     // lockstep simulation stays in sync with x86 players
+     uint8_t disable_x87_single_fast;  // X87_DISABLE_SINGLE_FAST fall back to the generic
+                                       // per-op emitters for isolated (run==1) fld/fst/fstp
+     uint8_t enable_fma_contract;      // X87_ENABLE_FMA_CONTRACT   fold fmul+fadd/fsub into one
+diff --git a/rosetta_core/include/rosetta_core/X87Cache.h b/rosetta_core/include/rosetta_core/X87Cache.h
+index 3e5047c..c91a5df 100644
+--- a/rosetta_core/include/rosetta_core/X87Cache.h
++++ b/rosetta_core/include/rosetta_core/X87Cache.h
+@@ -5,6 +5,11 @@
+ struct IRBlock;
+ struct IRInstr;
+ 
++// X87_EXACT=1 — refuse the operations whose results are not bit-identical to
++// real x87, so a lockstep simulation stays in sync with players on x86.
++bool x87_exact_mode();
++bool is_bit_exact_x87(uint16_t op);
++
+ // OPT-1: Cross-instruction x87 base/TOP register cache.
+ //
+ // When consecutive x87 instructions appear in a block, the base address
+diff --git a/rosetta_core/src/ConfigEnv.cpp b/rosetta_core/src/ConfigEnv.cpp
+index 1f7f534..9c71fb8 100644
+--- a/rosetta_core/src/ConfigEnv.cpp
++++ b/rosetta_core/src/ConfigEnv.cpp
+@@ -136,6 +136,7 @@ RosettaConfig load_config_from_env() {
+     }
+     cfg.disable_deferred_fxch = env_truthy("X87_DISABLE_DEFERRED_FXCH") ? 1 : 0;
+     cfg.disable_x87_ir = env_truthy("X87_DISABLE_X87_IR") ? 1 : 0;
++    cfg.x87_exact = env_truthy("X87_EXACT") ? 1 : 0;
+     cfg.disable_x87_single_fast = env_truthy("X87_DISABLE_SINGLE_FAST") ? 1 : 0;
+     cfg.enable_fma_contract = env_truthy("X87_ENABLE_FMA_CONTRACT") ? 1 : 0;
+     cfg.enable_fma_reduce = env_default_on("X87_ENABLE_FMA_REDUCE");
+diff --git a/rosetta_core/src/Translator.cpp b/rosetta_core/src/Translator.cpp
+index 3f98d76..019cc25 100644
+--- a/rosetta_core/src/Translator.cpp
++++ b/rosetta_core/src/Translator.cpp
+@@ -829,12 +829,26 @@ static auto translate_instruction_impl(TranslationResult* translation_result, IR
+     // GPRs and no deferred TOP/tag/perm state can exist then — x87_end flushes
+     // everything at run end.  Counts into tally_single so profile_analyze
+     // stays comparable across configs.
++    // X87_EXACT: an opcode whose result is not bit-identical to real x87 must
++    // reach stock, so never let the single-op fast path claim one.
++    const bool exact_bail = x87_exact_mode() && !is_bit_exact_x87(opcode);
++
+     bool single_fast = false;
+-    if (!fused && !cache.active() &&
++    if (!fused && !exact_bail && !cache.active() &&
+         !(g_rosetta_config && g_rosetta_config->disable_x87_single_fast)) {
+         single_fast = TranslatorX87::try_translate_single_fast(translation_result, cur_instr);
+     }
+ 
++    // Hand it to stock exactly as the deliberate fall-through set below does.
++    // is_handled_x87 has already broken the run before this instruction, so
++    // x87_end flushed deferred state and stock reads coherent X87State.
++    if (exact_bail) {
++        cache.tally_ft = static_cast<uint16_t>(cache.tally_ft + 1);
++        mirror_tally();
++        translation_result->free_gpr_mask = cache.stock_free_gpr_mask;
++        return std::nullopt;
++    }
++
+     if (!fused && !single_fast) {
+         switch (opcode) {
+             case Opcode::kOpcodeName_fldz:
+diff --git a/rosetta_core/src/X87Cache.cpp b/rosetta_core/src/X87Cache.cpp
+index 88f59dc..28341f8 100644
+--- a/rosetta_core/src/X87Cache.cpp
++++ b/rosetta_core/src/X87Cache.cpp
+@@ -2,6 +2,8 @@
+ 
+ #include <cstdint>
+ 
++#include "rosetta_core/Config.h"
++#include "rosetta_core/CoreConfig.h"
+ #include "rosetta_core/IRInstr.h"
+ #include "rosetta_core/Opcode.h"
+ #include "rosetta_core/X87Bridge.h"
+@@ -36,7 +38,51 @@
+ // Composing them was empirically validated to corrupt all 8 ST slots.
+ // =============================================================================
+ 
++// X87_EXACT=1 — refuse every operation whose result is not bit-identical to
++// real x87, so a lockstep simulation stays in sync with players on x86.
++//
++// The inline transcendentals are within a ulp of the true result but do not
++// match Intel's, and one ulp is enough to desync a match. The irrational
++// constant loads lose their low mantissa bits for the same reason: they are
++// materialised as doubles.
++//
++// Excluding them HERE is the point. X87_STOCK_OPS tries to do this by
++// short-circuiting the translate request, which leaves deferred stack state
++// that already-emitted code still owes, and returns garbage. Refusing them in
++// is_handled_x87 instead makes the run break before the op, so x87_end flushes
++// deferred state and stock translates it against coherent X87State — exactly
++// how fclex/finit/fldenv/fstenv/fxsave/fxrstor already reach stock.
++bool x87_exact_mode() {
++    return g_rosetta_config != nullptr && g_rosetta_config->x87_exact != 0;
++}
++
++bool is_bit_exact_x87(uint16_t op) {
++    switch (op) {
++        case kOpcodeName_fsin:
++        case kOpcodeName_fcos:
++        case kOpcodeName_fsincos:
++        case kOpcodeName_fptan:
++        case kOpcodeName_fpatan:
++        case kOpcodeName_f2xm1:
++        case kOpcodeName_fyl2x:
++        case kOpcodeName_fyl2xp1:
++        case kOpcodeName_fprem:
++        case kOpcodeName_fprem1:
++        case kOpcodeName_fldpi:
++        case kOpcodeName_fldln2:
++        case kOpcodeName_fldl2e:
++        case kOpcodeName_fldl2t:
++        case kOpcodeName_fldlg2:
++            return false;
++        default:
++            return true;
++    }
++}
++
+ static bool is_handled_x87(uint16_t op) {
++    if (x87_exact_mode() && !is_bit_exact_x87(op)) {
++        return false;
++    }
+     switch (op) {
+         case kOpcodeName_fldz:
+         case kOpcodeName_fld1:
