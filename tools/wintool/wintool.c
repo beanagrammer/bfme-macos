@@ -436,6 +436,8 @@ int main(int argc,char**argv){
   if(!strcmp(argv[1],"list")){ EnumWindows(enum_list,0); return 0; }
   if(!strcmp(argv[1],"cursor")) return do_cursor();
   if(!strcmp(argv[1],"curtest")) return do_curtest();
+  if(!strcmp(argv[1],"setcur")&&argc>=4){ SetCursorPos(atoi(argv[2]),atoi(argv[3])); Sleep(150);
+    POINT p; GetCursorPos(&p); printf("cursor now %ld,%ld\n",p.x,p.y); return 0; }
   if(!strcmp(argv[1],"pipesrv")&&argc>=4) return do_pipesrv(argv[2],atoi(argv[3]));
   if(!strcmp(argv[1],"apisrv")&&argc>=4) return do_apisrv(argv[2],atoi(argv[3]));
   if(!strcmp(argv[1],"apiproxy")&&argc>=5) return do_apiproxy(argv[2],argv[3],atoi(argv[4]));

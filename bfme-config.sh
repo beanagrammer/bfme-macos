@@ -77,6 +77,21 @@ bfme_wine() {
   )
 }
 
+# Stop wineserver the way it expects, so it saves the registry on the way out.
+bfme_wineserver_kill() {
+  local w="$BFME_WINE_ROOT"
+  local ws="$w/bin/wineserver"
+  [ -x "$ws" ] || ws="$w/server/wineserver"       # dev build tree
+  local deps="$w/deps/lib"
+  [ -d "$deps" ] || deps="$BFME_HOME/deps-x86_64/lib"
+  if [ -x "$ws" ]; then
+    WINEPREFIX="$BFME_PREFIX_DIR" DYLD_LIBRARY_PATH="$deps" "$ws" -k 2>/dev/null
+    sleep 2
+  fi
+  # Anything that ignored -k is not going to save anything anyway.
+  pkill -9 -f "$BFME_WINE_ROOT.*wineserver" 2>/dev/null
+}
+
 # Wait for the prefix to go idle. wineboot --init returns before wineserver has
 # finished writing the registry, and anything imported in that window is lost.
 bfme_wineserver_wait() {
@@ -101,8 +116,21 @@ bfme_screen_points() {
   print -r -- "$w $h"
 }
 
+# Wine's Retina mode is two Win32 pixels per Cocoa point and nothing else, and a
+# window drawn through OpenGL follows it whether we like it or not: macOS only
+# offers "1x" or "the display's full backing scale" for a GL surface, with no
+# fractional option. A fractional RetinaScale therefore sizes the *window* by the
+# fraction while its contents are still drawn at 2, which both leaves part of the
+# window unpainted and, worse, puts every mouse click in the wrong place -- Wine
+# maps the click by the fraction while the pixel under the cursor is at 2.
+#
+# So 2 is the default: correct rendering and correct clicks, with the game shown
+# at 1280x720 points rather than filling the screen. BFME_FRACTIONAL_SCALE=1 opts
+# into the larger game and accepts the misaimed clicks; it is not usable for the
+# Arena, only for looking at the game.
 bfme_display_scale() {
   local wh
+  [ -z "${BFME_FRACTIONAL_SCALE:-}" ] && { printf '2'; return 0; }
   wh=$(bfme_screen_points) || return 1
   awk -v w="${wh%% *}" -v h="${wh##* }" -v gw=$GAME_W -v gh=$GAME_H \
     'BEGIN { s = gw / w; t = gh / h; if (t > s) s = t; if (s < 1) s = 1; printf "%.6f", s }'
@@ -181,9 +209,12 @@ bfme_configure_wine() {
   done
 
   # A desktop whose size changed is still the old size in the running server.
+  # Shut it down gracefully with "wineserver -k": wineserver only writes the
+  # registry back to disk on a clean exit, so killing it with -9 here throws away
+  # the settings that were just imported.
   if [ -n "$previous" ] && [ "$previous" != "$desktop" ]; then
     print -r -- "  desktop size changed ($previous -> $desktop); restarting wineserver"
-    pkill -9 -f "$BFME_WINE_ROOT.*wineserver" 2>/dev/null
+    bfme_wineserver_kill
     sleep 3
   fi
 }

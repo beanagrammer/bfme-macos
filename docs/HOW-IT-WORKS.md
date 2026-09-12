@@ -138,7 +138,34 @@ Every one of these produced a wrong number at some point:
 - Leaked `wintool pin` / `winwatch` polling loops accumulate across runs and slow
   the whole machine down. They take a duration argument; use it.
 
-## Known limitation: GDI windows under a fractional RetinaScale
+## Why the scale is 2 and not a fraction
+
+A fractional `RetinaScale` makes the game fill the screen, and **breaks clicking**.
+
+macOS offers a GL-backed window either 1x or the display's full backing scale --
+`setWantsBestResolutionOpenGLSurface:` is a BOOL, with no fractional option. Wine
+draws these windows at that scale whatever `RetinaScale` says, so with a fraction
+the window's *geometry* is sized by the fraction while its *contents* are drawn at
+2. Two consequences, the second serious:
+
+- part of the window is never painted (content covers `scale/2` of it), and
+- every mouse click lands in the wrong place. Wine maps a click from Cocoa points
+  to Win32 pixels by the fraction, but the pixel under the cursor is at 2, so the
+  click registers at `scale/2` of where you aimed -- correct at the top-left and
+  increasingly wrong toward the bottom-right.
+
+That is not something the driver can paper over, so the default scale is 2:
+geometry and contents use the same factor and cannot disagree. The game is then
+shown at 1280x720 points rather than filling the screen.
+
+`BFME_FRACTIONAL_SCALE=1` restores the fullscreen game and the broken clicks. It
+is only useful for looking at the game, not for playing through the Arena.
+
+The other half of this is that these windows are *not* drawn through the GDI
+surface path -- instrumenting `WineContentView.updateLayer` produced no output for
+the Arena at all, which is what identified OpenGL as the path that matters.
+
+## Earlier note: GDI windows under a fractional RetinaScale
 
 `RetinaScale` works for the game, which renders through D3D/Metal. It does **not**
 fully work for a plain GDI window such as the Arena: the window's *geometry* uses
