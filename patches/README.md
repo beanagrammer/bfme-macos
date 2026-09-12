@@ -87,6 +87,12 @@ itself with absolute screen coordinates:
 | Value | Type | Meaning |
 |---|---|---|
 | `RetinaScale` | `REG_SZ` | Win32 pixels per Cocoa point while Retina mode is on. Default `2`, accepted range 1–8. |
+
+Retina mode had the factor 2 hardcoded in seven places across the window, layer
+and cursor-clipping code. Missing any one of them leaves that surface drawing at
+2x while its geometry uses the configured scale, so the content renders at
+`scale/2` of the window and the rest of the window is left unpainted — which is
+exactly what a GDI window looked like until all seven were converted.
 | `ConstrainWindows` | `REG_SZ` | `N` disables Cocoa's frame constraint so windows land exactly where Win32 puts them. Default on. |
 
 `HORZRES`/`VERTRES` now follow `SM_CXSCREEN`/`SM_CYSCREEN` instead of being

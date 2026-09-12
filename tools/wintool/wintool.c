@@ -456,6 +456,12 @@ int main(int argc,char**argv){
   HWND h=resolve(argv[2]); if(!h){fprintf(stderr,"window not found: %s\n",argv[2]);return 4;}
   if(!strcmp(argv[1],"detach")){ LONG st=GetWindowLongA(h,GWL_STYLE); st&=~WS_CHILD; st|=WS_POPUP; SetWindowLongA(h,GWL_STYLE,st); HWND r=SetParent(h,NULL); SetWindowPos(h,HWND_TOP,60,60,0,0,SWP_NOSIZE|SWP_FRAMECHANGED|SWP_SHOWWINDOW); printf("detached %p (old parent %p) err=%lu\n",h,r,(unsigned long)GetLastError()); return 0; }
   if(!strcmp(argv[1],"show")){ ShowWindow(h,SW_SHOW); printf("shown\n"); return 0; }
+  if(!strcmp(argv[1],"resize")&&argc>=5){ SetWindowPos(h,NULL,0,0,atoi(argv[3]),atoi(argv[4]),SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+    RECT r; GetWindowRect(h,&r); printf("resized rect=%ld,%ld,%ld,%ld\n",(long)r.left,(long)r.top,(long)r.right,(long)r.bottom); return 0; }
+  if(!strcmp(argv[1],"maximize")){ ShowWindow(h,SW_MAXIMIZE); RECT r; GetWindowRect(h,&r);
+    printf("maximized rect=%ld,%ld,%ld,%ld\n",(long)r.left,(long)r.top,(long)r.right,(long)r.bottom); return 0; }
+  if(!strcmp(argv[1],"restore")){ ShowWindow(h,SW_RESTORE); RECT r; GetWindowRect(h,&r);
+    printf("restored rect=%ld,%ld,%ld,%ld\n",(long)r.left,(long)r.top,(long)r.right,(long)r.bottom); return 0; }
   if(!strcmp(argv[1],"fg")) return do_foreground(h);
   if(!strcmp(argv[1],"find")){ RECT r; GetWindowRect(h,&r); printf("hwnd=%p rect=%ld,%ld,%ld,%ld\n",h,r.left,r.top,r.right,r.bottom); return 0; }
   if(!strcmp(argv[1],"shot")&&argc>=4) return shot(h,argv[3]);

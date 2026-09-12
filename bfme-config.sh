@@ -233,6 +233,65 @@ bfme_start_backdrop() {
   ( "$helper" lotrbfme.exe >/dev/null 2>&1 & )
 }
 
+# The Arena opens a 1500x1000 window, which on a screen bigger than that leaves
+# most of the display showing whatever is behind it. Maximise it once it exists;
+# its WPF layout reflows properly. This does not affect the coordinates the Arena
+# uses to drive the *game* -- those are absolute screen coordinates for the game
+# window and are independent of the Arena's own size.
+# The Arena opens a 1500x1000 window. On a screen bigger than that it is just a
+# window, which is fine -- but size it to the desktop so it uses the whole screen,
+# now that its layer scales correctly. This does not affect the coordinates the
+# Arena uses to drive the *game*: those are absolute screen coordinates for the
+# game window and are independent of the Arena's own size.
+# The Arena opens a 1500x1000 window, which on a large virtual desktop uses a
+# small part of the screen. Grow it -- but only to the point where its own layout
+# stops growing with it.
+#
+# Measured: the Arena's WPF content lays out to at most about 1920x1200 window
+# pixels. Past that the window gets bigger and the content does not, leaving blank
+# area inside the window, which looks worse than a smaller window that is full.
+# That limit is inside the Arena itself; nothing out here can scale past it.
+#
+# This does not affect the coordinates the Arena uses to drive the *game*: those
+# are absolute screen coordinates for the game window, independent of the Arena's
+# own size.
+ARENA_MAX_W=1920
+ARENA_MAX_H=1200
+
+bfme_maximize_arena() {
+  local tool="$BFME_TOOLS/wintool.exe" desktop dw dh
+  # Off by default: resizing the Arena's window from outside leaves its WPF
+  # layout half-updated (duplicated bars, stale strips) often enough that the
+  # smaller, correct window is the better default. BFME_ARENA_FULL=1 opts in.
+  [ -z "${BFME_ARENA_FULL:-}" ] && return 0
+  [ -f "$tool" ] || return 0            # optional
+  desktop=$(bfme_desktop_size) || return 0
+  dw=${desktop%x*}; dh=${desktop#*x}
+  [ "$dw" -gt "$ARENA_MAX_W" ] && dw=$ARENA_MAX_W
+  [ "$dh" -gt "$ARENA_MAX_H" ] && dh=$ARENA_MAX_H
+  (
+    # no "local" in here: this is a subshell, not a function body, and zsh treats
+    # local outside a function as an error, which kills the job silently.
+    #
+    # Waits on the process rather than on macOS window bounds: reading window
+    # names through CGWindowList needs Screen Recording permission, which a
+    # terminal usually has and an app bundle does not.
+    #
+    # Repeated because the Arena restarts itself after its update check, and
+    # anything done to the first window is lost when it does.
+    for i in $(seq 1 180); do
+      sleep 1
+      pgrep -f BfmeFoundationProject_OnlineArena.exe >/dev/null 2>&1 && break
+    done
+    for delay in 8 22 30 40; do
+      sleep $delay
+      pgrep -f BfmeFoundationProject_OnlineArena.exe >/dev/null 2>&1 || break
+      bfme_wine "$tool" move "Online Arena" 0 0 >>"${BFME_MAXIMIZE_LOG:-/dev/null}" 2>&1
+      bfme_wine "$tool" resize "Online Arena" "$dw" "$dh" >>"${BFME_MAXIMIZE_LOG:-/dev/null}" 2>&1
+    done
+  ) &
+}
+
 # Bring an already-running Wine program to the front.
 bfme_activate() {
   local pid

@@ -81,6 +81,8 @@ for f in bfme bfme-config.sh; do
 done
 cp "$REPO/tools/listmodes" "$APP_DIR/tools/" || die "missing tools/listmodes"
 cp "$REPO/tools/backdrop" "$APP_DIR/tools/" || die "missing tools/backdrop"
+cp "$REPO/tools/winlist" "$APP_DIR/tools/" || die "missing tools/winlist"
+cp "$REPO/tools/wintool/wintool.exe" "$APP_DIR/tools/" || die "missing tools/wintool/wintool.exe"
 chmod +x "$APP_DIR/bfme"
 print -r -- "  $APP_DIR"
 

@@ -25,7 +25,7 @@ index b6151a2c8c..285cb63784 100644
      cursorClipRect->origin.y *= scale;
      cursorClipRect->size.width *= scale;
 diff --git a/dlls/winemac.drv/cocoa_window.m b/dlls/winemac.drv/cocoa_window.m
-index 9672c3c952..b7c1f26f3d 100644
+index 9672c3c952..f4d40b9247 100644
 --- a/dlls/winemac.drv/cocoa_window.m
 +++ b/dlls/winemac.drv/cocoa_window.m
 @@ -107,6 +107,30 @@ static BOOL frame_intersects_screens(NSRect frame, NSArray* screens)
@@ -68,6 +68,42 @@ index 9672c3c952..b7c1f26f3d 100644
          host.frame = self.layer.bounds;
          host.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
  
+@@ -609,7 +633,7 @@ - (void) removeCALayerHostView:(CAContextID)contextId
+ 
+     - (void) setLayerRetinaProperties:(BOOL)mode
+     {
+-        [self layer].contentsScale = mode ? 2.0 : 1.0;
++        [self layer].contentsScale = mode ? retina_scale : 1.0;
+         [self layer].minificationFilter = mode ? kCAFilterLinear : kCAFilterNearest;
+         [self layer].magnificationFilter = mode ? kCAFilterLinear : kCAFilterNearest;
+ 
+@@ -623,7 +647,7 @@ - (void) setLayerRetinaProperties:(BOOL)mode
+             if (mode)
+             {
+                 [self layer].shouldRasterize = YES;
+-                [self layer].rasterizationScale = 2.0;
++                [self layer].rasterizationScale = retina_scale;
+             }
+             else
+                 [self layer].shouldRasterize = NO;
+@@ -647,7 +671,7 @@ - (void) setRetinaMode:(BOOL)mode
+         [self setLayerRetinaProperties:mode];
+ 
+         for (CALayerHost* host in [_caLayerHosts allValues])
+-            host.contentsScale = mode ? 2.0 : 1.0;
++            host.contentsScale = mode ? retina_scale : 1.0;
+ 
+         [super setRetinaMode:mode];
+     }
+@@ -884,7 +908,7 @@ - (void) dealloc
+ 
+     - (void) setRetinaMode:(BOOL)mode
+     {
+-        self.layer.contentsScale = mode ? 2.0 : 1.0;
++        self.layer.contentsScale = mode ? retina_scale : 1.0;
+         [super setRetinaMode:mode];
+     }
+ 
 @@ -895,7 +919,7 @@ - (CALayer*) makeBackingLayer
          layer.framebufferOnly = YES;
          layer.magnificationFilter = kCAFilterNearest;
@@ -98,6 +134,15 @@ index 9672c3c952..b7c1f26f3d 100644
              frame_intersects_screens(frameRect, screens))
              frameRect = [super constrainFrameRect:frameRect toScreen:screen];
          return frameRect;
+@@ -2516,7 +2543,7 @@ - (void) setRetinaMode:(BOOL)mode
+ 
+         [transform scaleBy:scale];
+ 
+-        [[self contentView] layer].mask.contentsScale = mode ? 2.0 : 1.0;
++        [[self contentView] layer].mask.contentsScale = mode ? retina_scale : 1.0;
+ 
+         for (WineBaseView* subview in [self.contentView subviews])
+         {
 @@ -3832,7 +3859,7 @@ - (instancetype) initWithHwnd:(void*)newHwnd bounds:(CGRect)bounds
      offscreen_layer.framebufferOnly = YES;
      offscreen_layer.magnificationFilter = kCAFilterNearest;

@@ -137,3 +137,20 @@ Every one of these produced a wrong number at some point:
   is `dlls/winemac.drv/winemac.so`.
 - Leaked `wintool pin` / `winwatch` polling loops accumulate across runs and slow
   the whole machine down. They take a duration argument; use it.
+
+## The Arena's own window
+
+The Arena's launcher/lobby window is separate from the game and has its own
+limit: its WPF content lays out to at most about 1920x1200 window pixels. Past
+that the window grows and the content does not, leaving blank area inside the
+window. Resizing it from outside while it is running also leaves the layout
+half-updated — duplicated bars, stale strips — because WPF does not fully
+re-run its layout for an external `SetWindowPos`.
+
+So on a large virtual desktop the Arena is a window, not fullscreen, and that is
+the Arena's behaviour rather than something the driver or the launcher can fix.
+`BFME_ARENA_FULL=1` resizes it to that limit anyway (about 75% of the screen
+here instead of 58%) if you would rather have the size than the clean layout.
+
+None of this affects the game: the Arena drives it with absolute screen
+coordinates for the game window, which are independent of the Arena's own size.
