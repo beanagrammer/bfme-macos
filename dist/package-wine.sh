@@ -38,6 +38,32 @@ printf '%s\n' "$VERSION" > "$BUNDLE/WINE_VERSION"
 DYLD_LIBRARY_PATH="$BUNDLE/deps/lib" WINEDEBUG=-all "$BUNDLE/bin/wine" --version >/dev/null \
   || { echo "FATAL: the packaged Wine does not run" >&2; exit 1; }
 
+# And the x87 JIT must actually accelerate something. It fails silently -- the
+# sidecar starts, its probe passes, and everything runs at Rosetta's software-x87
+# speed -- so a bundle has shipped broken twice without this check. Use the real
+# loader, never bin/wine: that stub re-execs and drops the sidecar's hook.
+BENCH="$ROOT/tools/x87check/x87bench.exe"
+LOADER="$BUNDLE/lib/wine/x86_64-unix/wine"
+if [ -f "$BENCH" ] && [ -x "$LOADER" ]; then
+  echo "Checking the x87 JIT..."
+  run_bench() {
+    WINEPREFIX="${WINEPREFIX:-$HOME/.wine-aio-custom}" WINEDEBUG=-all \
+    DYLD_LIBRARY_PATH="$BUNDLE/deps/lib" ${1:+ROSETTA_X87_PATH="$BUNDLE/x87sidecar/x87sidecar"} \
+      "$LOADER" "$BENCH" 20000000 2>/dev/null | sed -n 's/.*(\([0-9.]*\) Miter.*/\1/p'
+  }
+  JIT=$(run_bench 1); NOJIT=$(run_bench "")
+  [ -n "$JIT" ] && [ -n "$NOJIT" ] \
+    || { echo "FATAL: could not measure the x87 JIT in the packaged bundle" >&2; exit 1; }
+  RATIO=$(awk -v a="$JIT" -v b="$NOJIT" 'BEGIN{ if (b>0) printf "%.1f", a/b; else print "0" }')
+  echo "  $JIT Miter/s with the JIT, $NOJIT without (${RATIO}x)"
+  [ "$(awk -v r="$RATIO" 'BEGIN{print (r < 3) ? 1 : 0}')" = "1" ] \
+    && { echo "FATAL: the x87 JIT is not working in this bundle; refusing to ship it." >&2
+         echo "       See docs/HOW-IT-WORKS.md -- usually bin/wine or a leaked X87_SIDECAR_ACTIVE." >&2
+         exit 1; }
+else
+  echo "WARNING: no x87 benchmark to verify the JIT with" >&2
+fi
+
 mkdir -p "$OUT"
 TARBALL="$OUT/bfme-wine-$VERSION-arm64.tar.zst"
 echo "Compressing (this takes a minute)..."

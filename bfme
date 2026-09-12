@@ -100,6 +100,23 @@ cmd_doctor() {
     || { print -r -- "                 DOES NOT RUN"; ok=0; }
   print -r -- "  prefix         $BFME_PREFIX_DIR"
   [ -f "$BFME_PREFIX_DIR/system.reg" ] || { print -r -- "                 not created yet -- run 'bfme bootstrap'"; ok=0; }
+  # The x87 JIT fails silently -- the sidecar runs, its probe passes, and it
+  # accelerates nothing. Measuring is the only way to know.
+  local bench="$BFME_TOOLS/x87check/x87bench.exe" jit nojit ratio
+  if [ -f "$bench" ] && [ -z "${BFME_NO_X87:-}" ]; then
+    jit=$(bfme_wine "$bench" 20000000 2>/dev/null | sed -n 's/.*(\([0-9.]*\) Miter.*/\1/p')
+    nojit=$(BFME_NO_X87=1 bfme_wine "$bench" 20000000 2>/dev/null | sed -n 's/.*(\([0-9.]*\) Miter.*/\1/p')
+    if [ -n "$jit" ] && [ -n "$nojit" ]; then
+      ratio=$(awk -v a="$jit" -v b="$nojit" 'BEGIN{ if (b>0) printf "%.1f", a/b; else print "0" }')
+      printf '  x87 JIT        %s Miter/s vs %s without (%sx)\n' "$jit" "$nojit" "$ratio"
+      if [ "$(awk -v r="$ratio" 'BEGIN{print (r < 3) ? 1 : 0}')" = "1" ]; then
+        print -r -- "                 NOT WORKING -- loads will take minutes. See docs/HOW-IT-WORKS.md"
+        ok=0
+      fi
+    else
+      print -r -- "  x87 JIT        could not measure"
+    fi
+  fi
   print -r -- "  display        $("$BFME_TOOLS/listmodes" 2>/dev/null | head -1 | sed 's/^current: //')"
   print -r -- "  scale          $(bfme_display_scale 2>/dev/null || echo '?')"
   local sc
