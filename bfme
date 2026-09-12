@@ -51,6 +51,14 @@ cmd_launcher() {
 
 cmd_arena() {
   bfme_launch_guard "BfmeFoundationProject_OnlineArena.exe" "The Online Arena" || return 0
+  # The Arena is the online path, and online is where x87 differences bite: the
+  # JIT's transcendentals do not match the x87 every opponent is running on.
+  # Say so here rather than let a match end in "out of sync" with no clue why.
+  if [ ! -f "$BFME_APP_SUPPORT/sync-safe" ]; then
+    print -r -- "  note: sync-safe is OFF. Fast, but the x87 JIT's results differ from"
+    print -r -- "        players on Windows, which can desync a ranked match."
+    print -r -- "        'bfme sync-safe on' is bit-exact, at a much slower load."
+  fi
   bfme_stop_wine
   bfme_ensure_wineserver
   bfme_configure_wine
