@@ -183,6 +183,24 @@ correctly rounded. If anything is worth doing upstream it is the narrower
 `X87_STOCK_OPS` fix below, which would let a caller pay for exactness only on
 the opcodes that need it, without giving up the JIT everywhere.
 
+## The {x22, w23} restore is not sufficient either
+
+`Register.h` marks x22 as "scratch GPR pool start", so by the time a
+transcendental is refused, x22 holds sidecar scratch rather than the X87State
+pointer stock's helper expects. That looked like the whole story.
+
+It is not. Restoring both -- `emit_x87_base` into x22 and `emit_load_top` into
+w23 -- before returning `std::nullopt` changes nothing: `fsin` still returns its
+input unchanged, 100% of the time, with the IR pipeline on or off. A debug print
+confirms the refusal fires for 0xf4, 0xc7 and 0xbc, so the path is reached and
+stock still does not perform the operation.
+
+So the obstacle is not simply which registers hold what. Something about the
+None reply for these opcodes means stock never executes them, and from outside
+the project there is no way to see what. This is the one change that would make
+exactness affordable for a lockstep game, and it needs someone with the
+Rosetta-side knowledge.
+
 ## What would help
 
 Any one of:
