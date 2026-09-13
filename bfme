@@ -25,7 +25,7 @@ BFME_PREFIX_DIR=$(bfme_find_prefix)
 ARENA_EXE="C:\\users\\$USER\\AppData\\Roaming\\BFME Competetive Arena\\BfmeFoundationProject_OnlineArena.exe"
 LAUNCHER_EXE="C:\\users\\$USER\\AppData\\Roaming\\BFME All In One Launcher\\AllInOneLauncher.exe"
 
-usage() { sed -n '2,12p' "$BFME_SELF" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,14p' "$BFME_SELF" | sed 's/^# \{0,1\}//'; }
 
 cmd_bootstrap() {
   print -r -- "Prefix: $BFME_PREFIX_DIR"
