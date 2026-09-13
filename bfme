@@ -10,6 +10,7 @@
 #   bfme make-apps   (re)create the apps in ~/Applications
 #   bfme sync-safe on|off|status   trade x87 speed for results that match x86 players
 #   bfme collect-desync            gather the evidence after an online game went out of sync
+#   bfme validate-sync             play one match with the JIT off and collect the result
 #
 # Your macOS display resolution is never changed.
 set -u
@@ -253,6 +254,46 @@ cmd_make_apps() {
 # evidence still exists: the game writes a desync report naming the subsystem
 # that mismatched, and the Arena's log is truncated on its next launch. This
 # grabs all of it before that happens. Run it straight after the match.
+# One command for the experiment that decides whether the x87 JIT is what
+# desynchronises online games. It is the only question left that cannot be
+# answered from this machine, because it needs a real opponent.
+#
+# Turns the JIT off, starts the Arena, waits for the session to end, and
+# collects the evidence immediately -- the Arena rewrites its log on its next
+# launch, so doing it by hand afterwards usually means doing it too late.
+cmd_validate_sync() {
+  cmd_sync_safe on
+  local out="$HOME/Desktop/bfme-sync-test-$(date +%Y%m%d-%H%M%S)"
+  print -r --
+  print -r -- "  Starting the Arena with the x87 JIT off."
+  print -r -- "  Loading a match takes about five minutes. The frame rate is normal."
+  print -r -- "  Play one game, then leave the Arena."
+  print -r --
+  print -r -- "  Keep this terminal open: the evidence is gathered when the game exits."
+  print -r --
+  ( cmd_arena >/dev/null 2>&1 & )
+  # Give the Arena time to appear before watching for it to go away.
+  local w=0
+  while [ "$w" -lt 60 ]; do
+    pgrep -f "BfmeFoundationProject_OnlineArena.exe" >/dev/null && break
+    sleep 2; w=$((w+2))
+  done
+  if ! pgrep -f "BfmeFoundationProject_OnlineArena.exe" >/dev/null; then
+    print -r -- "  the Arena did not start; nothing to validate" >&2
+    return 1
+  fi
+  print -r -- "  Arena running. Waiting for the session to end..."
+  while pgrep -f "BfmeFoundationProject_OnlineArena.exe|lotrbfme.exe" >/dev/null; do
+    sleep 10
+  done
+  print -r -- "  session ended; collecting"
+  cmd_collect_desync "$out"
+  print -r --
+  print -r -- "  If the match stayed in sync, the x87 JIT was the cause and"
+  print -r -- "  'bfme sync-safe on' is the fix. If it went out of sync anyway,"
+  print -r -- "  the collected report names what actually mismatched."
+}
+
 cmd_collect_desync() {
   local out="${1:-$HOME/Desktop/bfme-desync-$(date +%Y%m%d-%H%M%S)}"
   mkdir -p "$out" || bfme_die "could not create $out"
@@ -324,6 +365,7 @@ case "${1:-}" in
   make-apps)  cmd_make_apps ;;
   sync-safe)  shift; cmd_sync_safe "${1:-status}" ;;
   collect-desync) shift; cmd_collect_desync "${1:-}" ;;
+  validate-sync)  cmd_validate_sync ;;
   prefix-path) print -r -- "$BFME_PREFIX_DIR" ;;
   wine-path)  print -r -- "$BFME_WINE_ROOT" ;;
   run)        shift; cmd_run "$@" ;;
