@@ -55,19 +55,37 @@ inside a translated block.
 
 Raw x87 throughput is unchanged: 55.9 against 54.9 Miter/s.
 
-## Not done yet
+## Where each opcode stands
 
-- `fpatan` (29% differ) and `fyl2xp1` (43% differ) still use the fast path.
-  BFME reaches both, so they still need doing. `fpatan` is straightforward in
-  principle: correctly-rounded `atan2` matches x87 1200/1200, so it needs no
-  special constant, just double-double evaluation. `fyl2xp1` is only 94% under
-  correct rounding, so it needs x87's intermediate precision emulated as well.
-- `f2xm1` (67% differ) is left alone deliberately: BFME never reaches it, and
-  inside its defined domain of |x| <= 1 correct rounding already matches x87
-  2999/3000.
-- The exact path needs six free FPRs and falls back to the fast path below
-  that. It did not trigger once in a full game load, but the fallback is
-  silent correctness loss, so it should probably become a spill instead.
+BFME reaches five of these, measured by logging every opcode the sidecar
+translates during a real game: `fsin` 9 sites, `fcos` 7, `fpatan` 5,
+`fyl2xp1` 4, `fldpi` 1. It never reaches `f2xm1`, `fyl2x`, `fptan`, `fprem`
+or `fsincos`.
+
+| opcode | sites | state |
+| --- | --- | --- |
+| `fsin` | 9 | **exact**, this patch |
+| `fcos` | 7 | **exact**, this patch |
+| `fpatan` | 5 | algorithm verified exact, emitter not written |
+| `fyl2xp1` | 4 | see below -- cannot be recomputed |
+| `fldpi` | 1 | not looked at |
+| `f2xm1` | 0 | not reached by this game |
+
+`fpatan` needs no special constant: x87 is correctly rounded there, confirmed
+1200/1200. `tools/x87check/x87atan-model.py` in the bfme-macos repo has a
+verified double-double scheme (2000/2000) designed to be emittable without
+branches -- reciprocal fold as a min/max select, a 17-entry table of
+atan(j/16), an 8-term series. It just needs writing as an emitter.
+
+`fyl2xp1` is the awkward one. x87 is **not** correctly rounded for it: inside
+its defined domain, for |x| between 1e-6 and 0.01, it sits 2 to 3 ulp off the
+correctly-rounded value on 39% of inputs, while outside that band it is exact.
+So it cannot be reproduced by computing it accurately -- it would need x87's
+own algorithm. The natural answer is to route just that opcode to stock
+Rosetta, which is affordable precisely because it is rare, but a first attempt
+at a selective handoff did not work and was reverted. Note that the handoff
+mechanism itself is sound once `cache.invalidate()` is added to the None path;
+the difficulty is making it fire only for the chosen opcodes.
 
 ## On the double rounding
 
