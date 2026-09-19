@@ -92,6 +92,10 @@ bfme_wine() {
     # of it; x87sidecar JITs those instructions to ARM64 instead.
     if [ -z "${BFME_NO_X87:-}" ] && [ -x "$sidecar" ]; then
       export ROSETTA_X87_PATH="$sidecar"
+      # Compute FSIN and FCOS the way real x87 does, so a lockstep match stays
+      # in sync with players on Windows. Costs about four seconds of level
+      # load and nothing measurable in play. X87_EXACT=0 turns it off.
+      export X87_EXACT="${X87_EXACT:-1}"
     fi
     exec "$loader" "$@"
   )
