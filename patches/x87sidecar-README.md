@@ -1,70 +1,73 @@
-# x87sidecar exact-mode attempt — DOES NOT WORK
+# Patch for x87sidecar: bit-exact FSIN/FCOS
 
-`x87sidecar-0001-exact-mode.patch` applies cleanly to
-[athei/x87sidecar](https://github.com/athei/x87sidecar) at **v1.6.0** and
-produces a sidecar that computes **wrong answers**. It is kept here as a record
-of an approach that fails, and why, so nobody tries it again the same way.
+`x87sidecar-0002-exact-trig.patch` applies to
+[athei/x87sidecar](https://github.com/athei/x87sidecar) at **v1.6.0** and adds
+`X87_EXACT=1`, which makes FSIN and FCOS match real x87 bit for bit at almost
+no cost.
 
-**Do not install it.**
+## Why
 
-## What it was trying to do
+BFME is a lockstep RTS: only inputs cross the network, every client re-derives
+the same state, and one differing bit desynchronises the match. The JIT's
+inline transcendentals disagree with real x87 on 63% of `fsin` and 70% of
+`fcos` results. That was confirmed to break a real online game, and confirmed
+fixed by running x87 on stock Rosetta instead.
 
-BFME is a lockstep simulation: one differing bit desynchronises a match. The JIT
-is bit-exact with real x87 for add, sub, mul, div and `fsqrt` at the `0x027F`
-control word Windows runs at, and off by one unit in the last place for every
-transcendental, because it emits its own Cody-Waite reduction and polynomial
-rather than Intel's. `tools/x87check/x87exact.exe` measures it.
+## What x87 actually computes
 
-The idea was to hand just those opcodes to stock Rosetta and JIT everything
-else, via a new `X87_EXACT=1`.
+Not undocumented microcode, which is what we assumed for a long time. It
+reduces the argument using **pi rounded to 66 significant bits**, then rounds
+the result correctly. Measured against a live reference over 2500 inputs:
 
-## Why it fails
+| reduction constant | matches real x87 |
+| --- | --- |
+| pi to 53 bits | 60.9% |
+| pi to 64 bits | 93.4% |
+| **pi to 66 bits** | **100.0%** |
+| pi to 80 bits | 98.7% |
+| the host's libm | 95.4% |
 
-`X87Cache.cpp` says plainly:
+So "make the transcendentals more accurate" is the wrong goal: correct rounding
+against the *true* pi disagrees with x87 on ~5% of inputs and by up to 393 ulp
+for large arguments.
 
-> There is deliberately no general per-opcode fallback: transcendentals would
-> clash on stock's {x22, w23} helper-call ABI, which is why this list stays
-> short.
+## What the patch does
 
-That is exactly what happens. With the patch applied and `X87_EXACT=1`, the
-refused instructions do not execute at all. `fsin` and `fcos` leave their input
-on the stack unchanged, `fpatan` and `fyl2x` return zeros, and the
-rotate-and-normalise loop in `x87exact.exe` comes back as NaN. The opcodes are
-refused by `is_handled_x87` and returned as `std::nullopt` from the dispatch,
-which is the mechanism `fclex`/`finit`/`fldenv`/`fstenv`/`fxsave`/`fxrstor` use
-correctly — but those are metadata-only ops that do not go through stock's
-helper-call path. The transcendentals do, and composing it does not work.
+Keeps the existing shape -- reduce mod pi, sine series only, flip the sign on
+an odd multiple, no quadrant branch, no cosine polynomial -- and changes two
+things:
 
-It is not a subtle failure. It is worse than the divergence it was meant to fix.
+1. the reduction constant becomes the 66-bit pi (which needs only two doubles;
+   the third term is exactly zero), and
+2. the reduction and the series are carried in double-double.
 
-## How it briefly looked like it worked
+The reduced argument and its square live in a 32-byte stack frame, because the
+8-FPR pool cannot hold a double-double Horner otherwise. SP is a usable stack
+inside a translated block.
 
-The verification filtered the program's output with `grep -v '^\['` before
-diffing. The section headers it needed to find are `[0x027F 53-bit ...]`, which
-start with `[`, so the filter removed them, the range extraction matched
-nothing, and two empty strings compared equal. The measurement reported
-"bit-exact" while the build was returning NaN.
+## Measured
 
-Two lessons, both now enforced in `bfme doctor`:
+| | skirmish load | in-game | `fsin` vs real x87 |
+| --- | --- | --- | --- |
+| stock v1.6.0 | 19.1 s | 38.5 fps | 63% differ |
+| **this patch, `X87_EXACT=1`** | **23.2 s** | **37.9 fps** | **0% differ** |
+| JIT disabled entirely | 311.5 s | 33.8 fps | 0% differ |
 
-- A comparison that can pass by comparing nothing is not a test. Assert the
-  inputs are non-empty first.
-- "Could not measure" must read as unknown, never as passing.
+Raw x87 throughput is unchanged: 55.9 against 54.9 Miter/s.
 
-The upstream test suite does not catch this either: 987 passed, 0 failed with
-the patch applied, because nothing in it exercises `X87_EXACT`.
+## Not done yet
 
-## What would actually be needed
+- `fcos` is at 1 mismatch in 3000, on a near-tie where the true value sits
+  0.49992 through an ulp and x87 rounds the other way. Emulating a 64-bit
+  intermediate rounding did not reproduce its choice.
+- `f2xm1` (67% differ) and `fpatan` (29% differ) still use the fast path and
+  need the same treatment.
+- The exact path needs six free FPRs and falls back to the fast path below
+  that. It did not trigger once in a full game load, but the fallback is
+  silent correctness loss, so it should probably become a spill instead.
 
-Making the JIT's transcendentals match Intel bit for bit, in the JIT, rather
-than delegating them. Bochs and QEMU both carry softfloat x87 implementations
-aimed at this. That is a real project, not a knob.
+## Reproducing the measurements
 
-The separate `X87_STOCK_OPS` bug is still worth reporting upstream on its own:
-see `tools/x87check/stockops-bug.c`.
-
-## Current state
-
-Unchanged from before this attempt: the JIT is fast and one ulp off on
-transcendentals. `bfme doctor` now reports that honestly instead of staying
-quiet about it.
+`tools/x87check` in this repo: `x87diff.exe` plus `x87diff.py` for the
+differential rate, and `x87exact-model.py` for the offline model the algorithm
+was derived from.

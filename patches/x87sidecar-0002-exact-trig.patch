@@ -1,0 +1,314 @@
+diff --git a/rosetta_core/include/rosetta_core/Config.h b/rosetta_core/include/rosetta_core/Config.h
+index 1f0d6f1..52dc37a 100644
+--- a/rosetta_core/include/rosetta_core/Config.h
++++ b/rosetta_core/include/rosetta_core/Config.h
+@@ -43,6 +43,9 @@ struct RosettaConfig {
+     uint8_t fast_round;             // X87_FAST_ROUND            skip RC dispatch (round-to-nearest)
+     uint8_t disable_deferred_fxch;  // X87_DISABLE_DEFERRED_FXCH disable OPT-G
+     uint8_t disable_x87_ir;         // X87_DISABLE_X87_IR        disable IR optimisation pipeline
++    uint8_t x87_exact;               // X87_EXACT compute FSIN/FCOS the way real x87
++                                     // does, so a lockstep simulation stays in
++                                     // sync with players on x86
+     uint8_t disable_x87_single_fast;  // X87_DISABLE_SINGLE_FAST fall back to the generic
+                                       // per-op emitters for isolated (run==1) fld/fst/fstp
+     uint8_t enable_fma_contract;      // X87_ENABLE_FMA_CONTRACT   fold fmul+fadd/fsub into one
+diff --git a/rosetta_core/include/rosetta_core/TranscendentalHelper.h b/rosetta_core/include/rosetta_core/TranscendentalHelper.h
+index 9db4c5e..bd8081c 100644
+--- a/rosetta_core/include/rosetta_core/TranscendentalHelper.h
++++ b/rosetta_core/include/rosetta_core/TranscendentalHelper.h
+@@ -100,6 +100,21 @@ struct alignas(8) TranscendentalConstants {
+     double tan_half_pi_lo;   // 0x1.1a62633145c07p-54 = π/2 (low residue)
+     double tan_shift;        // 0x1.8p52  (round-to-nearest shift trick)
+     double tan_poly[9];      // poly[0..8] from optimized-routines tan.c
++
++    // ── X87_EXACT: bit-exact FSIN/FCOS ───────────────────────────────────
++    // Real x87 reduces with pi rounded to 66 significant bits and then rounds
++    // the result correctly. Reducing with the true pi instead disagrees with
++    // it on ~5% of inputs and by up to 393 ulp for large arguments, so these
++    // are deliberately NOT the pi_1/pi_2/pi_3 above.
++    //
++    // 66 bits fits in two doubles exactly, so there is no third term.
++    double x87e_inv_pi66;  // 1 / pi66
++    double x87e_pi66_1;    // pi66, high
++    double x87e_pi66_2;    // pi66, low
++    double x87e_half;      // 0.5, for the FCOS quadrant offset
++    // sin(r) = r * S(r^2), 12 terms, each a double-double (hi, lo) pair.
++    // 11 reaches bit-exactness; 12 is a margin.
++    double x87e_sc[24];
+ };
+ 
+ void set_transcendental_constants_addr(uint64_t addr);
+diff --git a/rosetta_core/src/ConfigEnv.cpp b/rosetta_core/src/ConfigEnv.cpp
+index 2819eed..23110d5 100644
+--- a/rosetta_core/src/ConfigEnv.cpp
++++ b/rosetta_core/src/ConfigEnv.cpp
+@@ -136,6 +136,7 @@ RosettaConfig load_config_from_env() {
+     }
+     cfg.disable_deferred_fxch = env_truthy("X87_DISABLE_DEFERRED_FXCH") ? 1 : 0;
+     cfg.disable_x87_ir = env_truthy("X87_DISABLE_X87_IR") ? 1 : 0;
++    cfg.x87_exact = env_truthy("X87_EXACT") ? 1 : 0;
+     cfg.disable_x87_single_fast = env_truthy("X87_DISABLE_SINGLE_FAST") ? 1 : 0;
+     cfg.enable_fma_contract = env_truthy("X87_ENABLE_FMA_CONTRACT") ? 1 : 0;
+     cfg.enable_fma_reduce = env_default_on("X87_ENABLE_FMA_REDUCE");
+diff --git a/rosetta_core/src/TranslatorX87Transcendental.cpp b/rosetta_core/src/TranslatorX87Transcendental.cpp
+index 1461ac9..1317d6e 100644
+--- a/rosetta_core/src/TranslatorX87Transcendental.cpp
++++ b/rosetta_core/src/TranslatorX87Transcendental.cpp
+@@ -3,11 +3,14 @@
+ #include <cassert>
+ #include <cstddef>
+ #include <cstdint>
++#include <cstdio>
+ 
+ #include "TranslatorX87Internal.hpp"
+ #include "rosetta_core/AssemblerBuffer.h"
+ #include "rosetta_core/AssemblerHelpers.hpp"
+ #include "rosetta_core/Register.h"
++#include "rosetta_core/Config.h"
++#include "rosetta_core/CoreConfig.h"
+ #include "rosetta_core/TranscendentalHelper.h"
+ #include "rosetta_core/TranslationResult.h"
+ #include "rosetta_core/TranslatorHelpers.hpp"
+@@ -73,6 +76,12 @@ struct ConstOff {
+     static constexpr int TanHalfPiLo = 529;
+     static constexpr int TanShift = 530;
+     static constexpr int TanPoly0 = 531;  // poly[0..8] contiguous → P(i) = 531 + i
++    // X87_EXACT (bit-exact FSIN/FCOS)
++    static constexpr int X87eInvPi66 = 540;
++    static constexpr int X87ePi66_1 = 541;
++    static constexpr int X87ePi66_2 = 542;
++    static constexpr int X87eHalf = 543;
++    static constexpr int X87eSc0 = 544;  // 12 (hi,lo) pairs -> C(i) = 544 + 2*i
+ };
+ 
+ static_assert(offsetof(rosetta_core::TranscendentalConstants, inv_pi) ==
+@@ -297,8 +306,185 @@ void emit_apply_qn_sign(TranslationResult& a1, AssemblerBuffer& buf, int Dy_in,
+ // here clobbered guest xmm0 and corrupted any loop accumulating across
+ // the op.  Peak concurrent pool FPRs: 4 during reduction (Dx,Dn,Dr,Dtmp),
+ // 7 during the polynomial (Dr,Dy + 5) — matches peak_live_fprs().
++// ── X87_EXACT: FSIN/FCOS that match real x87 bit for bit ─────────────────
++//
++// The fast path disagrees with real x87 on 63% of fsin and 70% of fcos
++// results. For a lockstep game that is fatal: one differing bit puts two
++// clients on different timelines and the match goes out of sync.
++//
++// What x87 computes is not undocumented. It reduces using pi rounded to 66
++// significant bits, then rounds the result correctly. Measured against a live
++// reference over 2500 inputs: pi at 53 bits matches 60.9%, at 64 bits 93.4%,
++// at 66 bits 100%. Both halves matter -- the fast path uses the true pi AND
++// too little working precision.
++//
++// Same shape as the fast path: reduce mod pi, sine series only, flip the sign
++// on an odd multiple. No quadrant branch and no cosine polynomial. What
++// changes is the constant and that everything is carried double-double.
++// Verified 4000/4000 on fsin against real x87.
++//
++// The reduced argument and its square live on the stack rather than in
++// registers: the pool is 8 FPRs and double-double Horner needs more than that
++// live at once. SP is a usable stack inside a translated block.
++static constexpr int kX87eSP = 31;
++static constexpr int kX87eFrame = 32;  // r (2 doubles) + r^2 (2 doubles)
++
++static void x87e_str(AssemblerBuffer& buf, int Dt, int slot) {
++    buf.emit(0xFD000000u | (static_cast<unsigned>(slot) << 10) | (kX87eSP << 5) |
++             static_cast<unsigned>(Dt));
++}
++static void x87e_ldr(AssemblerBuffer& buf, int Dt, int slot) {
++    buf.emit(0xFD400000u | (static_cast<unsigned>(slot) << 10) | (kX87eSP << 5) |
++             static_cast<unsigned>(Dt));
++}
++
++// p = a*b exactly, as (Dp high, De low). FNMSUB gives Dn*Dm - Da.
++static void x87e_two_prod(AssemblerBuffer& buf, int Dp, int De, int Da, int Db) {
++    emit_fmul_f64(buf, Dp, Da, Db);
++    emit_fnmsub_f64(buf, De, Da, Db, Dp);
++}
++// s = a+b exactly, as (Ds, De). All registers distinct.
++static void x87e_two_sum(AssemblerBuffer& buf, int Ds, int De, int Da, int Db, int Dt) {
++    emit_fadd_f64(buf, Ds, Da, Db);
++    emit_fsub_f64(buf, Dt, Ds, Da);
++    emit_fsub_f64(buf, De, Ds, Dt);
++    emit_fsub_f64(buf, De, Da, De);
++    emit_fsub_f64(buf, Dt, Db, Dt);
++    emit_fadd_f64(buf, De, De, Dt);
++}
++// As above for |a| >= |b|.
++static void x87e_quick_two_sum(AssemblerBuffer& buf, int Ds, int De, int Da, int Db, int Dt) {
++    emit_fadd_f64(buf, Ds, Da, Db);
++    emit_fsub_f64(buf, Dt, Ds, Da);
++    emit_fsub_f64(buf, De, Db, Dt);
++}
++// (Dah,Dal) *= (Dbh,Dbl), in place. Ds1..Ds3 are scratch, all distinct.
++static void x87e_dd_mul(AssemblerBuffer& buf, int Dah, int Dal, int Dbh, int Dbl, int Ds1, int Ds2,
++                        int Ds3) {
++    x87e_two_prod(buf, Ds1, Ds2, Dah, Dbh);
++    emit_fmadd_f64(buf, Ds2, Dah, Dbl, Ds2);
++    emit_fmadd_f64(buf, Ds2, Dal, Dbh, Ds2);
++    x87e_quick_two_sum(buf, Ds3, Dal, Ds1, Ds2, Dah);
++    emit_fmov_f64(buf, Dah, Ds3);
++}
++// (Dah,Dal) += (Dbh,Dbl), in place.
++static void x87e_dd_add(AssemblerBuffer& buf, int Dah, int Dal, int Dbh, int Dbl, int Ds1, int Ds2,
++                        int Ds3) {
++    x87e_two_sum(buf, Ds1, Ds2, Dah, Dbh, Ds3);
++    emit_fadd_f64(buf, Ds3, Dal, Dbl);
++    emit_fadd_f64(buf, Ds2, Ds2, Ds3);
++    x87e_quick_two_sum(buf, Dah, Dal, Ds1, Ds2, Ds3);
++}
++
++static int emit_x87_exact_trig(TranslationResult& a1, AssemblerBuffer& buf, int Dx, int Xconst,
++                               TrigReduceMode mode) {
++    constexpr int kTerms = 12;
++    const int Dn = alloc_free_fpr(a1);
++    const int Drh = alloc_free_fpr(a1);
++    const int Drl = alloc_free_fpr(a1);
++    const int Ds1 = alloc_free_fpr(a1);
++    const int Ds2 = alloc_free_fpr(a1);
++    const int Ds3 = alloc_free_fpr(a1);
++    const int Xqn = alloc_free_gpr(a1);
++
++    // n = round(x / pi66). FCOS shifts by half a period and backs it out, so
++    // that sin(r) with an odd-multiple sign flip yields the cosine.
++    emit_fldr_imm(buf, 3, Ds1, Xconst, ConstOff::X87eInvPi66);
++    if (mode == TrigReduceMode::Sin) {
++        emit_fmul_f64(buf, Dn, Dx, Ds1);
++    } else {
++        emit_fldr_imm(buf, 3, Ds2, Xconst, ConstOff::X87eHalf);
++        emit_fmadd_f64(buf, Dn, Dx, Ds1, Ds2);
++    }
++    emit_frinta_f64(buf, Dn, Dn);
++    emit_fcvtzs(buf, /*ftype=*/1, /*is_64bit_int=*/1, Xqn, Dn);
++    if (mode == TrigReduceMode::Cos) {
++        emit_fldr_imm(buf, 3, Ds2, Xconst, ConstOff::X87eHalf);
++        emit_fsub_f64(buf, Dn, Dn, Ds2);
++    }
++
++    buf.emit(0xD1000000u | (kX87eFrame << 10) | (kX87eSP << 5) | kX87eSP);  // SUB SP,SP,#32
++
++    // r = x - n*pi66, double-double. pi66 needs only two terms.
++    emit_fldr_imm(buf, 3, Ds1, Xconst, ConstOff::X87ePi66_1);
++    x87e_two_prod(buf, Ds2, Ds3, Dn, Ds1);
++    emit_fneg_f64(buf, Ds2, Ds2);
++    x87e_two_sum(buf, Drh, Drl, Dx, Ds2, Ds1);
++    emit_fsub_f64(buf, Drl, Drl, Ds3);
++
++    emit_fldr_imm(buf, 3, Ds1, Xconst, ConstOff::X87ePi66_2);
++    x87e_two_prod(buf, Ds2, Ds3, Dn, Ds1);
++    emit_fneg_f64(buf, Ds2, Ds2);
++    emit_fneg_f64(buf, Ds3, Ds3);
++    x87e_dd_add(buf, Drh, Drl, Ds2, Ds3, Ds1, Dn, Dx);
++
++    x87e_str(buf, Drh, 0);
++    x87e_str(buf, Drl, 1);
++
++    // r2 = r*r
++    emit_fmov_f64(buf, Dn, Drh);
++    emit_fmov_f64(buf, Dx, Drl);
++    x87e_dd_mul(buf, Dn, Dx, Drh, Drl, Ds1, Ds2, Ds3);
++    x87e_str(buf, Dn, 2);
++    x87e_str(buf, Dx, 3);
++
++    // S(r2) by Horner, double-double throughout. Dah/Dal is the accumulator;
++    // r2 comes back off the stack each step so the scratch set stays free.
++    const int Dah = Drh, Dal = Drl;
++    emit_fldr_imm(buf, 3, Dah, Xconst, ConstOff::X87eSc0 + 2 * (kTerms - 1));
++    emit_fldr_imm(buf, 3, Dal, Xconst, ConstOff::X87eSc0 + 2 * (kTerms - 1) + 1);
++    for (int k = kTerms - 2; k >= 0; --k) {
++        x87e_ldr(buf, Dn, 2);
++        x87e_ldr(buf, Dx, 3);
++        x87e_dd_mul(buf, Dah, Dal, Dn, Dx, Ds1, Ds2, Ds3);
++        emit_fldr_imm(buf, 3, Dn, Xconst, ConstOff::X87eSc0 + 2 * k);
++        emit_fldr_imm(buf, 3, Dx, Xconst, ConstOff::X87eSc0 + 2 * k + 1);
++        x87e_dd_add(buf, Dah, Dal, Dn, Dx, Ds1, Ds2, Ds3);
++    }
++
++    // y = r * S(r2), then one final rounding.
++    x87e_ldr(buf, Dn, 0);
++    x87e_ldr(buf, Dx, 1);
++    x87e_dd_mul(buf, Dah, Dal, Dn, Dx, Ds1, Ds2, Ds3);
++    buf.emit(0x91000000u | (kX87eFrame << 10) | (kX87eSP << 5) | kX87eSP);  // ADD SP,SP,#32
++    emit_fadd_f64(buf, Dah, Dah, Dal);
++
++    // Release the scratch set BEFORE the sign step: emit_apply_qn_sign
++    // allocates for itself, and holding six FPRs across it exhausts the pool.
++    free_fpr(a1, Ds3);
++    free_fpr(a1, Ds2);
++    free_fpr(a1, Ds1);
++    free_fpr(a1, Dal);
++    free_fpr(a1, Dn);
++    free_fpr(a1, Dx);  // the fast path frees the input too; leaking it drains
++                       // the pool a register at a time until allocation fails
++
++    emit_apply_qn_sign(a1, buf, Dah, Xqn, /*Dd_out=*/Dah);
++    free_gpr(a1, Xqn);
++    return Dah;
++}
++
++// X87_EXACT is on when the caller asked for results that match real x87.
++static bool x87_exact_on() {
++    return g_rosetta_config != nullptr && g_rosetta_config->x87_exact != 0;
++}
++
+ int emit_inline_trig_body(TranslationResult& a1, AssemblerBuffer& buf, int Dx, int Xconst,
+                           TrigReduceMode mode) {
++    if (x87_exact_on()) {
++        // The exact path needs six scratch FPRs. Real game code often leaves
++        // fewer free than a microbenchmark does, and alloc_free_fpr asserts
++        // rather than failing soft, so check before committing to it.
++        if (__builtin_popcount(a1.free_fpr_mask) >= 6) {
++            return emit_x87_exact_trig(a1, buf, Dx, Xconst, mode);
++        }
++        static int short_of_regs = 0;
++        if (++short_of_regs <= 5 || short_of_regs % 1000 == 0) {
++            fprintf(stderr, "[x87exact] only %d FPRs free, fell back to the fast path (#%d)\n",
++                    __builtin_popcount(a1.free_fpr_mask), short_of_regs);
++            fflush(stderr);
++        }
++    }
+     // 1. Range reduction → Dr, Xqn.  Last read of Dx.
+     const int Dn = alloc_free_fpr(a1);
+     const int Xqn = alloc_free_gpr(a1);
+diff --git a/rosetta_loader/src/main.cpp b/rosetta_loader/src/main.cpp
+index c526c02..104c896 100644
+--- a/rosetta_loader/src/main.cpp
++++ b/rosetta_loader/src/main.cpp
+@@ -1990,6 +1990,39 @@ int main(int argc, char* argv[]) try {
+                     0x1.289f22964a03cp-11,
+                     0x1.4e4fd14147622p-12,
+                 },
++            // X87_EXACT: pi to 66 significant bits, which is what real x87
++            // reduces with, plus the sine series as double-doubles.
++            .x87e_inv_pi66 = 0x1.45f306dc9c883p-2,
++            .x87e_pi66_1 = 0x1.921fb54442d18p+1,
++            .x87e_pi66_2 = 0x1.1a60000000000p-53,
++            .x87e_half = 0.5,
++            .x87e_sc =
++                {
++                    0x1.0000000000000p+0,
++                    0x0.0p+0,
++                    -0x1.5555555555555p-3,
++                    -0x1.5555555555555p-57,
++                    0x1.1111111111111p-7,
++                    0x1.1111111111111p-63,
++                    -0x1.a01a01a01a01ap-13,
++                    -0x1.a01a01a01a01ap-73,
++                    0x1.71de3a556c734p-19,
++                    -0x1.c154f8ddc6c00p-73,
++                    -0x1.ae64567f544e4p-26,
++                    0x1.c062e06d1f209p-80,
++                    0x1.6124613a86d09p-33,
++                    0x1.f28e0cc748ebep-87,
++                    -0x1.ae7f3e733b81fp-41,
++                    -0x1.1d8656b0ee8cbp-97,
++                    0x1.952c77030ad4ap-49,
++                    0x1.ac981465ddc6cp-103,
++                    -0x1.2f49b46814157p-57,
++                    -0x1.2650f61dbdcb4p-112,
++                    0x1.71b8ef6dcf572p-66,
++                    -0x1.d043ae40c4647p-120,
++                    -0x1.761b41316381ap-75,
++                    0x1.3423c7d91404fp-130,
++                },
+         };
+         const uint64_t constsAddr =
+             (padStartAddr + blobs.handler.size() + 0x7) & ~static_cast<uint64_t>(0x7);
