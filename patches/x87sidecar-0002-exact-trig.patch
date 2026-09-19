@@ -51,7 +51,7 @@ index 2819eed..23110d5 100644
      cfg.enable_fma_contract = env_truthy("X87_ENABLE_FMA_CONTRACT") ? 1 : 0;
      cfg.enable_fma_reduce = env_default_on("X87_ENABLE_FMA_REDUCE");
 diff --git a/rosetta_core/src/TranslatorX87Transcendental.cpp b/rosetta_core/src/TranslatorX87Transcendental.cpp
-index 1461ac9..1317d6e 100644
+index 1461ac9..3e81b86 100644
 --- a/rosetta_core/src/TranslatorX87Transcendental.cpp
 +++ b/rosetta_core/src/TranslatorX87Transcendental.cpp
 @@ -3,11 +3,14 @@
@@ -82,7 +82,7 @@ index 1461ac9..1317d6e 100644
  };
  
  static_assert(offsetof(rosetta_core::TranscendentalConstants, inv_pi) ==
-@@ -297,8 +306,185 @@ void emit_apply_qn_sign(TranslationResult& a1, AssemblerBuffer& buf, int Dy_in,
+@@ -297,8 +306,226 @@ void emit_apply_qn_sign(TranslationResult& a1, AssemblerBuffer& buf, int Dy_in,
  // here clobbered guest xmm0 and corrupted any loop accumulating across
  // the op.  Peak concurrent pool FPRs: 4 during reduction (Dx,Dn,Dr,Dtmp),
  // 7 during the polynomial (Dr,Dy + 5) — matches peak_live_fprs().
@@ -227,7 +227,48 @@ index 1461ac9..1317d6e 100644
 +    x87e_ldr(buf, Dx, 1);
 +    x87e_dd_mul(buf, Dah, Dal, Dn, Dx, Ds1, Ds2, Ds3);
 +    buf.emit(0x91000000u | (kX87eFrame << 10) | (kX87eSP << 5) | kX87eSP);  // ADD SP,SP,#32
-+    emit_fadd_f64(buf, Dah, Dah, Dal);
++
++    // x87 lands the result in an 80-bit register (64-bit mantissa) and only
++    // then rounds to the 53 bits the control word asks for. Collapsing our
++    // 106-bit value straight to 53 disagrees with that at near-ties: one fcos
++    // input in 3000, where the true value sits 0.49992 through an ulp and x87
++    // rounds the other way. So snap the low half onto the 64-bit grid first.
++    //
++    //   vh = m * 2^E, so the grid step is 2^(E-63) and its reciprocal
++    //   2^(63-E). Both are exact powers of two, so the scaling never rounds.
++    {
++        const int Xb = alloc_free_gpr(a1);
++        const int Xe = alloc_free_gpr(a1);
++        emit_fadd_f64(buf, Dn, Dah, Dal);  // the plain sum, used if we bail out
++
++        emit_fmov_d_to_x(buf, Xb, Dah);
++        emit_bitfield(buf, /*is_64bit=*/1, /*opc=*/2, /*N=*/1, /*immr=*/52, /*imms=*/62, Xb, Xe);
++
++        emit_movz_movk_abs64(buf, Xb, 2109);
++        emit_subs_reg(buf, 1, Xb, Xe, Xb);                       // 2109 - e
++        emit_bitfield(buf, 1, 2, 1, /*immr=*/12, /*imms=*/11, Xb, Xb);  // << 52
++        emit_fmov_x_to_d(buf, Ds1, Xb);
++        emit_fmul_f64(buf, Ds2, Dal, Ds1);                       // t = vl * 2^(63-E)
++
++        emit_movz_movk_abs64(buf, Xb, 0x4338000000000000ULL);    // 1.5 * 2^52
++        emit_fmov_x_to_d(buf, Ds3, Xb);
++        emit_fadd_f64(buf, Ds2, Ds2, Ds3);
++        emit_fsub_f64(buf, Ds2, Ds2, Ds3);                       // t rounded to integer
++
++        emit_movz_movk_abs64(buf, Xb, 63);
++        emit_subs_reg(buf, 1, Xe, Xb, Xb);                       // e - 63
++        emit_bitfield(buf, 1, 2, 1, 12, 11, Xb, Xb);
++        emit_fmov_x_to_d(buf, Ds1, Xb);
++        emit_fmadd_f64(buf, Ds3, Ds2, Ds1, Dah);                 // vh + t*step
++
++        // A zero high word makes the exponent arithmetic meaningless (and can
++        // produce 0 * inf), so fall back to the plain sum there.
++        emit_movi_d_zero(buf, Ds1);
++        emit_fcmp_f64(buf, Dah, Ds1);
++        emit_fcsel_f64(buf, Dah, Dn, Ds3, /*cond=*/0x0);  // EQ (vh == 0) -> plain
++        free_gpr(a1, Xe);
++        free_gpr(a1, Xb);
++    }
 +
 +    // Release the scratch set BEFORE the sign step: emit_apply_qn_sign
 +    // allocates for itself, and holding six FPRs across it exhausts the pool.
