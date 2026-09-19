@@ -11,12 +11,14 @@ def load(path):
             f = line.split()
             # Data lines only: anything the sidecar logs is dropped here rather
             # than silently counted as a result.
-            if len(f) == 3 and len(f[1]) == 16 and len(f[2]) == 16:
+            # 3 fields for a one-operand op, 4 for a two-operand one
+            if len(f) in (3, 4) and all(len(v) == 16 for v in f[1:]):
                 try:
-                    int(f[1], 16), int(f[2], 16)
+                    for v in f[1:]:
+                        int(v, 16)
                 except ValueError:
                     continue
-                rows.append((f[0], f[1], f[2]))
+                rows.append((f[0], " ".join(f[1:-1]), f[-1]))
     return rows
 
 

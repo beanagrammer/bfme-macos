@@ -74,11 +74,22 @@ int main(int argc, char **argv) {
     UNARY("fsqrt", "fsqrt");          /* expected to agree: the control */
     UNARY("f2xm1", "f2xm1");
 
-    for (long i = 0; i < n; i++) {    /* fpatan takes two operands */
+    /* Two-operand forms print BOTH inputs: an earlier version xored them
+       together, which made the failing cases impossible to reproduce. */
+    for (long i = 0; i < n; i++) {
         double y = sample(), x = sample(), r;
         __asm__ volatile("fldl %1\n\t" "fldl %2\n\t" "fpatan\n\t" "fstpl %0"
                          : "=m"(r) : "m"(y), "m"(x) : "st");
-        printf("fpatan %016llX %016llX\n", double_to_bits(y) ^ double_to_bits(x),
+        printf("fpatan %016llX %016llX %016llX\n", double_to_bits(y), double_to_bits(x),
+               double_to_bits(r));
+    }
+    /* fyl2xp1: y * log2(x+1). BFME uses this one; x must be > -1. */
+    for (long i = 0; i < n; i++) {
+        double y = sample(), x = sample() * 0.25, r;
+        if (x <= -0.9) x = -0.5;
+        __asm__ volatile("fldl %1\n\t" "fldl %2\n\t" "fyl2xp1\n\t" "fstpl %0"
+                         : "=m"(r) : "m"(y), "m"(x) : "st");
+        printf("fyl2xp1 %016llX %016llX %016llX\n", double_to_bits(y), double_to_bits(x),
                double_to_bits(r));
     }
     return 0;
