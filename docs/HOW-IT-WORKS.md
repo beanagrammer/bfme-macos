@@ -348,7 +348,26 @@ That is why `sync-safe` is not a placeholder for a better fix. Short of a
 bit-exact x87 implementation, which is what Rosetta already is, there is no
 faster correct option.
 
-### Still unproven
+### Confirmed
+
+Tested in a real online game on 2026-09-19. With `sync-safe on`, so the x87 JIT
+off and x87 running on Rosetta's emulation, a Freeplay network match ran without
+going out of sync. The same player's earlier match, with the JIT on, desynced
+within seconds.
+
+So the JIT's transcendental divergence is the cause. That settles what had been
+the open question all along, and it makes the case for the upstream fix
+concrete rather than theoretical: this is not a hypothetical risk to a lockstep
+game, it is a reproduced one.
+
+It also sharpens the cost. The JIT is worth roughly 16x on load and, in a real
+match with a full unit count, noticeably more in play than the 38.5 against 33.8
+fps a quiet skirmish suggested. Turning it off entirely is correct and not
+practical. Routing only the transcendentals to stock -- 26 instruction sites out
+of 13,728 -- is the fix that would be both, and it is blocked on
+`X87_STOCK_OPS`.
+
+### Previously unproven
 
 That any of this causes the desync actually seen online. BFME executes 26
 divergent instruction sites out of 13,728 translated, so the code paths are

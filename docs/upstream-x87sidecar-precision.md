@@ -10,6 +10,16 @@ games against players on real x86
 
 **Version:** v1.6.0, and master at 010f50a. macOS 27, M2 Max, Wine 11.17 new-WoW64.
 
+## Confirmed to break a real game
+
+This is not a theoretical concern. The Battle for Middle-earth is a lockstep
+RTS, and on 2026-09-19 an online match desynchronised within seconds with the
+JIT enabled, then ran clean with `X87_ALWAYS_NONE` in force (x87 on stock
+Rosetta). Same machine, same player, same build otherwise.
+
+Turning the JIT off is not a usable answer: it costs about 16x on level load,
+minutes rather than seconds, which no opponent will wait through.
+
 ## What happens
 
 The inline transcendentals do not produce the correctly-rounded double, while
