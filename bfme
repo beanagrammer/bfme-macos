@@ -283,8 +283,16 @@ cmd_validate_sync() {
     return 1
   fi
   print -r -- "  Arena running. Waiting for the session to end..."
-  while pgrep -f "BfmeFoundationProject_OnlineArena.exe|lotrbfme.exe" >/dev/null; do
-    sleep 10
+  # The Arena restarts itself after its update check, so a plain "wait until the
+  # process is gone" ends the moment it blinks. Require a sustained absence.
+  local gone=0
+  while [ "$gone" -lt 60 ]; do
+    if pgrep -f "BfmeFoundationProject_OnlineArena.exe|lotrbfme.exe" >/dev/null; then
+      gone=0
+    else
+      gone=$((gone+5))
+    fi
+    sleep 5
   done
   print -r -- "  session ended; collecting"
   cmd_collect_desync "$out"
